@@ -13,6 +13,7 @@ anthropic
 requests
 beautifulsoup4
 lxml
+pdfplumber
 
 langdetect
 
