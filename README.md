@@ -80,18 +80,18 @@ RAG 기반 병역 행정절차 안내 챗봇입니다.
 
 ```
 backend/
-├── data/           # 원본 PDF, 파싱된 JSON, 평가용 test set
-├── pipeline/        # 파싱 → 청킹 → 태깅 → 임베딩
-├── retrieval/        # BM25 / Dense / Hybrid / Reranker
-├── classifier/       # Intent classifier 학습·추론
-├── llm/            # Claude API 연동
-├── routes/          # Flask API 엔드포인트
-├── db/             # MongoDB 연결
-└── evaluation/       # RAGAS 기반 정량 평가
+├── data/               # 원본 PDF, 파싱된 JSON, 평가용 test set
+├── pipeline/           # 파싱 → 청킹 → 태깅 → 임베딩
+├── retrieval/          # BM25 / Dense / Hybrid / Reranker
+├── classifier/         # Intent classifier 학습·추론
+├── llm/                # Claude API 연동
+├── routes/             # Flask API 엔드포인트
+├── db/                 # MongoDB 연결
+└── evaluation/         # RAGAS 기반 정량 평가
 
-frontend/           # Next.js 앱 (챗 UI, 프로필, 영한 토글)
-scripts/            # DB 세팅 및 파이프라인 실행 스크립트
-docs/              # 아키텍처 설명, 평가 결과 정리
+frontend/               # Next.js 앱 (챗 UI, 프로필, 영한 토글)
+scripts/                # DB 세팅 및 파이프라인 실행 스크립트
+docs/                   # 아키텍처 설명, 평가 결과 정리
 ```
 
 ## 시작하기
