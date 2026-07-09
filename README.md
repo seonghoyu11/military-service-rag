@@ -1,6 +1,6 @@
 # 해외체류 병역의무자 안내 챗봇 (Military Service RAG Chatbot)
 
-> **For English Speakers**
+> **For English Speakers**:
 > Please reference [README-en.md](README-en.md) for English Information
 
 영주권자, 유학생, 이중국적자, 재외동포 2세 등 해외체류 병역의무자를 위한
