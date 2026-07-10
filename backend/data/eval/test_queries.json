@@ -1,0 +1,155 @@
+[
+  {
+    "id": 1,
+    "question": "미국 영주권을 취득한 상태로 25세 전부터 계속 미국에 거주 중인데, 따로 국외여행허가를 안 받아도 인정되는 경우가 있나요? 몇 살까지 유효한가요?",
+    "user_type": "영주권자",
+    "topic": "국외여행허가",
+    "relevant_chunks": [
+      { "law_name": "병역법 시행령", "article_no": "149", "paragraph_no": "1" }
+    ],
+    "source": "실제 케이스 기반"
+  },
+  {
+    "id": 2,
+    "question": "고등학교에 재학 중인 유학생인데 이번에 나오는 병역판정검사를 미룰 수 있나요?",
+    "user_type": "유학생",
+    "topic": "연기",
+    "relevant_chunks": [
+      { "law_name": "병역법", "article_no": "60", "paragraph_no": "2" }
+    ],
+    "source": "병무청 FAQ 스타일"
+  },
+  {
+    "id": 3,
+    "question": "지금 해외에 체류 중인데, 이 상태로도 병역판정검사를 연기할 수 있나요?",
+    "user_type": "전체",
+    "topic": "연기",
+    "relevant_chunks": [
+      { "law_name": "병역법", "article_no": "60", "paragraph_no": "1" }
+    ],
+    "source": "병무청 FAQ 스타일"
+  },
+  {
+    "id": 4,
+    "question": "저는 해외에서 태어나 계속 부모님과 같이 외국에서 살아왔는데, 재외국민 2세로 인정받으려면 어떤 조건을 충족해야 하나요?",
+    "user_type": "재외동포2세",
+    "topic": "연기",
+    "relevant_chunks": [
+      { "law_name": "병역법 시행령", "article_no": "128", "paragraph_no": "5" }
+    ],
+    "source": "실제 케이스 기반"
+  },
+  {
+    "id": 5,
+    "question": "복수국적자인데 국외여행허가를 신청하면 병무청에서 외국 이름이나 국적을 별도로 관리하나요?",
+    "user_type": "이중국적자",
+    "topic": "국외여행허가",
+    "relevant_chunks": [
+      { "law_name": "병역의무자 국외여행 업무처리 규정", "article_no": "8", "paragraph_no": "4" },
+      { "law_name": "병역의무자 국외여행 업무처리 규정", "article_no": "18", "paragraph_no": "3" }
+    ],
+    "source": "가상 시나리오"
+  },
+  {
+    "id": 6,
+    "question": "영주권자인데 어차피 군대 갈 거 자진해서 빨리 입영하고 싶어요. 어떤 절차를 밟아야 하나요?",
+    "user_type": "영주권자",
+    "topic": "국외여행허가",
+    "relevant_chunks": [
+      { "law_name": "병역의무자 국외여행 업무처리 규정", "article_no": "24", "paragraph_no": "1" },
+      { "law_name": "병역의무자 국외여행 업무처리 규정", "article_no": "24", "paragraph_no": "2" }
+    ],
+    "source": "실제 케이스 기반"
+  },
+  {
+    "id": 7,
+    "question": "국외이주 목적으로 국외여행허가를 받고 나갔는데, 현지에서 취업해서 돈을 벌면 허가가 취소되나요?",
+    "user_type": "전체",
+    "topic": "허가취소",
+    "relevant_chunks": [
+      { "law_name": "병역법 시행령", "article_no": "147의2", "paragraph_no": "1" }
+    ],
+    "source": "병무청 FAQ 스타일"
+  },
+  {
+    "id": 8,
+    "question": "유학 목적으로 국외여행허가를 신청하려는데 재학 증명 관련해서 어떤 서류를 내야 하나요?",
+    "user_type": "유학생",
+    "topic": "국외여행허가",
+    "relevant_chunks": [
+      { "law_name": "병역의무자 국외여행 업무처리 규정", "article_no": "4", "paragraph_no": "4" },
+      { "law_name": "병역의무자 국외여행 업무처리 규정", "article_no": "9", "paragraph_no": "all" }
+    ],
+    "source": "실제 케이스 기반"
+  },
+  {
+    "id": 9,
+    "question": "국외여행허가를 받을 수 있는 사유가 유학, 연수 말고 또 뭐가 있나요? 법적으로 정해진 목록이 있나요?",
+    "user_type": "유학생",
+    "topic": "국외여행허가",
+    "relevant_chunks": [
+      { "law_name": "병역법 시행령", "article_no": "146", "paragraph_no": "1" }
+    ],
+    "source": "가상 시나리오"
+  },
+  {
+    "id": 10,
+    "question": "영주권자 등 입영희망원 내고 자진 입대한 병사는 정기휴가 때 고국(영주권 국가) 왕복 항공료를 지원받을 수 있나요?",
+    "user_type": "영주권자",
+    "topic": "여비지급",
+    "relevant_chunks": [
+      { "law_name": "국외영주권자 등 병 복무시 휴가여비 및 전역시 귀가여비 지급 훈령", "article_no": "2", "paragraph_no": "2" }
+    ],
+    "source": "실제 케이스 기반"
+  },
+  {
+    "id": 11,
+    "question": "국외여행허가가 취소되고 강제로 군복무 중인 사람도 정기휴가 여비를 받을 수 있나요?",
+    "user_type": "영주권자",
+    "topic": "여비지급",
+    "relevant_chunks": [
+      { "law_name": "국외영주권자 등 병 복무시 휴가여비 및 전역시 귀가여비 지급 훈령", "article_no": "2", "paragraph_no": "3" }
+    ],
+    "source": "병무청 FAQ 스타일"
+  },
+  {
+    "id": 12,
+    "question": "국외여행허가 기간이 끝나가는데 사정상 귀국하기 어려우면 어떻게 해야 하나요?",
+    "user_type": "전체",
+    "topic": "국외여행허가",
+    "relevant_chunks": [
+      { "law_name": "병역법", "article_no": "70", "paragraph_no": "3" }
+    ],
+    "source": "병무청 FAQ 스타일"
+  },
+  {
+    "id": 13,
+    "question": "국외이주 목적으로 부모님과 함께 영주권을 취득해서 3년 넘게 같이 산 병역준비역인데, 국외여행허가를 몇 살까지 받을 수 있나요?",
+    "user_type": "영주권자",
+    "topic": "국외여행허가",
+    "relevant_chunks": [
+      { "law_name": "병역법 시행령 별표 3", "article_no": "별표3" }
+    ],
+    "source": "실제 케이스 기반",
+    "note": "별표3은 13개 문장 청크가 모두 같은 article_no를 공유해서, 정답 판정이 '해당 조건에 맞는 특정 문장'이 아니라 '별표3 전체 중 하나라도 검색됐는가' 수준의 coarse-grained 체크가 됨"
+  },
+  {
+    "id": 14,
+    "question": "국외여행허가도 안 받고 계속 출국을 미루거나 기피하면 어떤 불이익이 있나요?",
+    "user_type": "전체",
+    "topic": "허가취소",
+    "relevant_chunks": [
+      { "law_name": "병역법", "article_no": "70", "paragraph_no": "2" }
+    ],
+    "source": "병무청 FAQ 스타일"
+  },
+  {
+    "id": 15,
+    "question": "카투사(KATUSA)로 배치받으려면 어떤 조건이 필요한가요?",
+    "user_type": "전체",
+    "topic": "없음",
+    "relevant_chunks": [],
+    "source": "의도적 데이터셋 제외 네거티브 테스트",
+    "note": "카투사는 모집병이라 '입영 전' 스코프 자체에는 들어가지만, (1) 실제 지원자격(TOEIC 점수 등)은 법조문이 아니라 매년 바뀌는 병무청 모집공고 성격이라 RAG에 넣어도 금방 outdated되고, (2) 「현역병 모집업무 규정」을 제대로 넣으려면 병역법 제20조/20조의2~4 + 시행령/시행규칙 준용조항이 줄줄이 딸려와 스코프가 무한정 커지므로 데이터셋에서 의도적으로 제외하기로 결정함 (기존 6개 문서로 확정). '재외국민 자진 입영 신청 가능 여부'라는 핵심 질문 자체는 이미 확보한 「병역의무자 국외여행 업무처리 규정」 제24조(영주권자 등 입영희망신청제도)로 커버됨. 이 질문은 법조항 검색이 아니라 '카투사/어학병/모집병' 키워드 매칭 시 '구체적 지원자격은 매년 병무청 모집공고에서 확인 필요'라는 fallback 안내 문구로 응답해야 함 (intent classifier 단계에서 처리 예정, 아래 project memory 참고)"
+  }
+]
