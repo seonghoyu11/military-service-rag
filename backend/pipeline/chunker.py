@@ -51,8 +51,11 @@ def chunk_articles(articles, law_name, source_doc):
         if len(all_para_text) <= 500 or len(paragraphs) <= 1:
             prefix = f"[{law_name} 제{art_no}조({art_title})]" if art_title else f"[{law_name} 제{art_no}조]"
             full_text = f"{prefix}\n{all_para_text}"
-            
-            refers_to = extract_references(full_text)
+
+            # Extract references from the body only -- the header prefix
+            # contains this article's own number in the same "제N조" shape,
+            # so running extraction on full_text falsely self-cites.
+            refers_to = extract_references(all_para_text)
             
             chunks.append({
                 "text": full_text,
@@ -71,8 +74,9 @@ def chunk_articles(articles, law_name, source_doc):
                 
                 prefix = f"[{law_name} 제{art_no}조({art_title}) 제{p_no}항]" if art_title else f"[{law_name} 제{art_no}조 제{p_no}항]"
                 full_text = f"{prefix}\n{p_text}"
-                
-                refers_to = extract_references(full_text)
+
+                # Same self-citation issue as the article-level branch above.
+                refers_to = extract_references(p_text)
                 
                 chunks.append({
                     "text": full_text,

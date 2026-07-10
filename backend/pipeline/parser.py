@@ -26,6 +26,17 @@ def clean_page_text(text, law_name):
         
     return "\n".join(cleaned_lines)
 
+def join_wrapped_lines(text):
+    """
+    Joins PDF line-wrap artifacts where pdfplumber inserted a bare newline
+    (no space) at a physical line break, splitting a word/어절 in two
+    (e.g. "사\\n람" -> "사람", "각\\n호의" -> "각호의"). Only merges when both
+    neighboring characters are Hangul syllables, and skips cases where the
+    next line starts a 가./나./다. list marker, so structural line breaks
+    between list items are preserved.
+    """
+    return re.sub(r'(?<=[가-힣])\n(?=[가-힣])(?![가-힣]\.\s)', '', text)
+
 def parse_standard_law(pdf_path, law_name):
     """
     Parses standard military law documents (e.g., Act, Decree, Regulation).
@@ -41,6 +52,9 @@ def parse_standard_law(pdf_path, law_name):
         for page in pdf.pages:
             page_text = page.extract_text()
             full_text += clean_page_text(page_text, law_name) + "\n"
+
+    # Step 1.5: Repair PDF line-wrap artifacts before any pattern matching
+    full_text = join_wrapped_lines(full_text)
 
     # Step 2: Strip revision history tags to keep the law text clean
     # Remove angle-bracket revision tags: e.g., <개정 2013. 6. 4., 2016. 5. 29.>
@@ -119,14 +133,19 @@ def clean_category(cat):
     Cleans up broken spaces/newlines in the category names from 별표3 table.
     """
     cat_clean = re.sub(r'\s+', ' ', cat).strip()
-    
+
+    # PDF table-cell wrapping inserts whitespace at arbitrary points (e.g.
+    # "사회복 무요원"), so match against a fully whitespace-stripped copy
+    # rather than requiring the substrings to be contiguous.
+    compact = re.sub(r'\s+', '', cat_clean)
+
     # Map the messy extracted string to clean, standardized target categories
-    if "병역준비" in cat_clean and "사회복무" in cat_clean:
+    if "병역준비" in compact and "사회복무" in compact:
         return "병역준비역, 사회복무요원 소집대상, 대체복무요원소집대상"
-        
-    if "군전공" in cat_clean and "공중보건" in cat_clean:
+
+    if "군전공" in compact and "공중보건" in compact:
         return "군전공의요원, 공중보건의사, 병역판정검사 전담의사, 공익법무관, 공중방역수의사, 현역복무를 마치지 아니한 예비역의 장교 및 부사관을 제외한 전 자원"
-        
+
     return cat_clean
 
 def format_row_to_sentence(category, subject, sub_subject, period, docs):
@@ -151,6 +170,7 @@ def format_row_to_sentence(category, subject, sub_subject, period, docs):
     # Fix spacing issues in docs
     doc = doc.replace("체류자격(허가서 ) 사본", "체류자격(허가서) 사본")
     doc = doc.replace("공동이용시스템으 로", "공동이용시스템으로")
+    doc = doc.replace("전자정 부법", "전자정부법")
     
     # Construct the subject clause of the sentence
     if sub_sub:
