@@ -5,6 +5,7 @@ python-dotenv
 
 sentence-transformers
 rank_bm25
+kiwipiepy
 transformers
 torch
 

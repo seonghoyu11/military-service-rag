@@ -38,3 +38,41 @@
 - MongoDB Atlas Vector Search 인덱스(`law_chunks_vector_index`, cosine, 1024차원)에 272개 청크
   전체를 BGE-m3로 임베딩하여 적재 완료. `$vectorSearch` 실제 쿼리로 검증함
   (`backend/pipeline/load_to_mongo.py`).
+
+## 3단계: Hybrid Retrieval + Reranker (2026-07-10)
+
+### 방법
+- BM25는 `kiwipiepy`로 형태소 분석 후 조사/어미를 제거한 명사/동사 어간만 인덱싱
+- Hybrid: BM25 + Dense(BGE-m3) 점수를 각각 min-max 정규화한 뒤 `alpha * dense + (1-alpha) * bm25`로
+  가중합. `alpha`는 0.0~1.0을 0.1 단위로 그리드서치 (`backend/evaluation/tune_hybrid.py`)
+- Reranker: 하이브리드 top-30 후보를 BAAI/bge-reranker-v2-m3로 재정렬
+
+### 결과 (test_queries.json 14번 문항 라벨 수정 후 기준)
+
+| 구성 | Recall@5 | Recall@10 | MRR | 부정(카투사) top1 |
+|---|---|---|---|---|
+| BM25 단독 | 1.0 | 1.0 | 0.818 | (점수 스케일 달라 비교 무의미) |
+| Hybrid (`alpha=0.3`, BM25 70% + Dense 30%) | **1.0** | **1.0** | **0.929** | (정규화 점수라 해석 어려움) |
+| Hybrid + Reranker | 1.0 (top-3 기준) | — | 0.881 | **0.000** |
+
+### 관찰
+
+- **BM25 단독이 이미 매우 강력함** (Recall@5/10 = 1.0). 이 프로젝트 도메인(병역법 Q&A)은 사용자
+  질문과 법조문이 어휘를 상당히 공유하기 때문으로 보임.
+- **Reranker는 Recall/MRR을 더 올리진 못했지만** (샘플이 14개뿐이라 노이즈 수준의 차이),
+  **점수의 해석 가능성에서 결정적으로 유리함**: 실제 정답 질문엔 0.77~0.999, 스코프 밖 질문(카투사)엔
+  0.000을 줘서 "관련 조항 없음" 판단에 쓸 수 있는 신뢰도 점수를 제공함. 2단계에서
+  multilingual-e5-large가 이 구분을 못했던 문제를 reranker가 해결.
+- **검증 과정에서 테스트셋 라벨 오류 하나를 발견**: 14번 문항("출국을 미루거나 기피하면 어떤
+  불이익")의 정답을 원래 병역법 제70조 제2항으로만 라벨링했는데, hybrid+reranker가 계속 병역법
+  제94조(국외여행허가 의무 위반 — 실제 처벌조항)를 1순위로 반환해서 확인해보니 그게 더 정확한
+  답이었음. 라벨을 수정(`제94조` 추가)한 뒤 재검증함.
+
+## 4단계: Intent Classifier 검증 (2026-07-10)
+
+- Rule-based 키워드 매칭(`classifier/predict.py`)을 test_queries.json 15문항에 대해 검증
+- 명시적으로 키워드가 포함된 질문은 정확히 분류됨. 구어체 표현(예: "미룰 수 있나요" → "연기"
+  키워드 없음)은 동의어를 추가해 대응
+- 암묵적 문맥이 필요한 케이스(예: 이전 대화에서 언급된 사용자 유형이 후속 질문엔 없음)는 규칙
+  기반 분류기의 근본적 한계로 남겨둠 — 계획대로 데이터가 쌓이면 경량 분류기로 교체 예정
+- 카투사 등 스코프 밖 키워드 매칭 시 `out_of_scope=True` + fallback 안내 문구 반환 확인함

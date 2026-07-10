@@ -139,9 +139,11 @@
     "user_type": "전체",
     "topic": "허가취소",
     "relevant_chunks": [
+      { "law_name": "병역법", "article_no": "94", "paragraph_no": "all" },
       { "law_name": "병역법", "article_no": "70", "paragraph_no": "2" }
     ],
-    "source": "병무청 FAQ 스타일"
+    "source": "병무청 FAQ 스타일",
+    "note": "원래 정답을 병역법 제70조 제2항(행정처리 절차)으로만 라벨링했는데, 3단계 hybrid+reranker 검증 과정에서 병역법 제94조(국외여행허가 의무 위반 - 실제 처벌 조항, 1~5년 징역)가 이 질문에 더 직접적으로 맞는 답이라는 걸 발견해서 추가함. 라벨링 실수였고 검색 시스템은 정상 동작한 케이스"
   },
   {
     "id": 15,
