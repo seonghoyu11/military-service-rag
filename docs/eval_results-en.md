@@ -103,3 +103,83 @@
   accumulates, per plan.
 - Confirmed that KATUSA-style out-of-scope keywords correctly trigger
   `out_of_scope=True` with the fallback message instead of running retrieval.
+
+## Prototype validation: diagnosing and fixing "enlistment postponement" tagging/ranking (2026-07-10)
+
+Wired up a Flask API (`app.py`, `routes/query.py`) plus a static HTML prototype
+(`frontend/prototype.html`) and found/fixed the following while testing real
+questions against it.
+
+### Issue 1: the "postponement" topic tag had no directionality
+
+For "I'm a permanent resident, how do I get an enlistment postponement?", a
+chunk about the *opposite* meaning — Art. 24 of the overseas-travel
+administrative directive (the voluntary-early-enlistment program, which
+explicitly *cancels* an existing postponement) — ranked first, while the
+actual answers (Enforcement Decree Art. 128/149, Attached Table 3) were either
+missing from the candidate pool or ranked far below it.
+
+**Root cause:**
+- `tagger.py` (via the shared keyword table in `classifier/model.py`) tagged
+  "postponement" purely on substring presence.
+- Every chunk's text is prefixed with a header like `[Act 제70조(국외여행의
+  허가 및 취소) 제N항]`, and that article's own *title* contains "취소"
+  (cancellation) — so every paragraph of Art. 70 got falsely flagged as
+  co-occurring "postponement" + "cancellation" regardless of that
+  paragraph's actual content.
+- More fundamentally: the intent classifier's tags were never wired into
+  actual retrieval ranking (hybrid + reranker) at all — they were purely
+  display metadata. No amount of tag refinement could have changed the
+  search results by itself.
+
+**Fix:**
+- Split the "postponement" topic into two directions: `입영연기_신청`
+  (grounds for getting one) and `입영연기_취소` (grounds for an existing one
+  being cancelled/withdrawn).
+  - Corpus side: a precise regex (`연기(를|처분을|처분의|처분과|의)?.{0,25}?취소`)
+    matches only the "the postponement itself is being cancelled" case (6
+    chunks) — far narrower than raw "postponement"+"cancellation"
+    co-occurrence (39 chunks), which would have wrongly caught unrelated
+    "permit revocation as a penalty" provisions (Art. 70, Art. 147-2, etc.).
+  - Article 24 of the travel directive has paragraphs that never literally
+    say "postponement...cancelled," so an article-title override was added:
+    if the title contains "입영희망" (wishes to enlist), tag it `_취소`
+    regardless of body wording — the whole article is inherently about
+    giving up an existing postponement to enlist early.
+  - Query side: cancellation/negation cues ("cancel," "withdraw," "want to
+    stop") trigger `_취소`; otherwise default to `_신청`.
+- Wired the tags into `routes/query.py`: widened the candidate pool
+  (30→50, since Art. 128 was previously outside it) and the reranked pool
+  (top-5→top-15), then applied a ±0.25 score adjustment based on whether the
+  chunk's direction tag matches the query's, before taking the final top-5.
+
+**Re-verification:**
+- "I'm a permanent resident, how do I get a postponement?" → Enforcement
+  Decree Art. 128(2) now ranks first (previously absent from the candidate
+  pool entirely); Art. 24 (the cancellation-direction chunk) drops to 4th.
+- "I'm a permanent resident, I want to cancel my postponement" (opposite
+  direction) → Art. 24 correctly boosts to ranks 1-3.
+- "I've held a permanent-residency for over 3 years, up to what age can I get
+  an overseas-travel permit?" (a residency-duration-specific question) →
+  Attached Table 3 sweeps the entire top-5. This confirms the system now
+  correctly routes general procedural questions to Art. 128 and
+  duration-specific questions to Table 3 — Table 3 not appearing for the
+  first, general question wasn't a bug after all.
+
+### Issue 2: steering the out-of-scope (KATUSA etc.) fallback toward adjacent, answerable info
+
+Previously, detecting a KATUSA/language-soldier keyword just returned "not in
+the law database." Improved it so that when a covered user type (permanent
+resident, international student, etc.) is also detected in the same
+question, the fallback steers toward genuinely answerable adjacent
+information — the voluntary-early-enlistment program (Art. 24) — instead of
+a dead end. `classify()` now returns a `related_lookup` (law name + article
+number) when applicable; `routes/query.py` fetches that article's full text
+and returns it as `related_scope_info`. When no user type is detected, no
+lookup is attempted — just a generic re-prompt.
+
+Tested: "How do I get assigned to KATUSA?" (no user type) → generic guidance
+only, `related_scope_info: null`. "I want to apply for KATUSA, can permanent
+residents do that too?" (user type detected) → permanent-resident-specific
+guidance plus all 9 paragraphs of Art. 24 returned as `related_scope_info`.
+Both behaved as intended.

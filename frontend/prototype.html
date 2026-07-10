@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>병역의무자 안내 챗봇 (프로토타입)</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    max-width: 720px;
+    margin: 40px auto;
+    padding: 0 20px;
+    background: #f7f7f8;
+    color: #1a1a1a;
+  }
+  h1 { font-size: 1.3rem; margin-bottom: 4px; }
+  .subtitle { color: #666; font-size: 0.85rem; margin-bottom: 24px; }
+  .search-box {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+  input[type=text] {
+    flex: 1;
+    padding: 12px 14px;
+    font-size: 1rem;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+  }
+  button {
+    padding: 12px 20px;
+    font-size: 1rem;
+    border: none;
+    border-radius: 8px;
+    background: #2b2b2b;
+    color: white;
+    cursor: pointer;
+  }
+  button:disabled { background: #999; cursor: not-allowed; }
+  .tags { margin-bottom: 16px; }
+  .tag {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 0.78rem;
+    margin-right: 6px;
+    margin-bottom: 6px;
+  }
+  .tag.user_type { background: #e0ecff; color: #1a4fa0; }
+  .tag.topic { background: #eaf7e6; color: #2c7a2c; }
+  .oos {
+    background: #fff4e5;
+    border: 1px solid #f0c36d;
+    padding: 16px;
+    border-radius: 8px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    margin-bottom: 14px;
+  }
+  .related-heading {
+    font-size: 0.82rem;
+    color: #888;
+    margin: 0 0 8px 2px;
+  }
+  .card {
+    background: white;
+    border: 1px solid #e3e3e3;
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin-bottom: 14px;
+  }
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 8px;
+  }
+  .card-title { font-weight: 600; font-size: 0.95rem; }
+  .card-score { font-size: 0.78rem; color: #888; }
+  .card-text {
+    white-space: pre-wrap;
+    font-size: 0.88rem;
+    line-height: 1.6;
+    color: #333;
+  }
+  .empty { color: #999; text-align: center; padding: 40px 0; }
+  .loading { color: #999; text-align: center; padding: 40px 0; }
+</style>
+</head>
+<body>
+  <h1>해외체류 병역의무자 안내 챗봇 — 프로토타입</h1>
+  <div class="subtitle">
+    검색 파이프라인(분류 → 하이브리드 검색 → 재정렬)만 연결된 상태입니다.
+    Claude API 답변 생성(5단계)은 아직 미연결.
+  </div>
+
+  <div class="search-box">
+    <input type="text" id="q" placeholder="예: 영주권자인데 국외여행허가 어떻게 받나요?" autofocus>
+    <button id="btn" onclick="runQuery()">검색</button>
+  </div>
+
+  <div id="output">
+    <div class="empty">질문을 입력하고 검색을 눌러보세요.</div>
+  </div>
+
+<script>
+const API_URL = "http://localhost:5001/api/query";
+
+document.getElementById("q").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runQuery();
+});
+
+async function runQuery() {
+  const q = document.getElementById("q").value.trim();
+  if (!q) return;
+
+  const btn = document.getElementById("btn");
+  const output = document.getElementById("output");
+  btn.disabled = true;
+  output.innerHTML = '<div class="loading">검색 중... (첫 요청은 모델 로딩 때문에 10~20초 걸릴 수 있어요)</div>';
+
+  try {
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: q }),
+    });
+    const data = await res.json();
+    render(data);
+  } catch (err) {
+    output.innerHTML = `<div class="empty">에러: ${err.message} (Flask 서버가 localhost:5001에서 돌고 있는지 확인하세요)</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function render(data) {
+  const output = document.getElementById("output");
+
+  if (data.error) {
+    output.innerHTML = `<div class="empty">${data.error}</div>`;
+    return;
+  }
+
+  let html = "";
+
+  if (data.intent) {
+    html += '<div class="tags">';
+    for (const t of data.intent.user_type_tags || []) {
+      html += `<span class="tag user_type">${escapeHtml(t)}</span>`;
+    }
+    for (const t of data.intent.topic_tags || []) {
+      html += `<span class="tag topic">${escapeHtml(t)}</span>`;
+    }
+    html += "</div>";
+  }
+
+  if (data.out_of_scope) {
+    html += `<div class="oos">${linkifyUrls(escapeHtml(data.message))}</div>`;
+
+    if (data.related_scope_info && data.related_scope_info.length > 0) {
+      html += '<div class="related-heading">참고할 수 있는 관련 조항</div>';
+      for (const r of data.related_scope_info) {
+        html += `
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">${escapeHtml(r.law_name)} 제${escapeHtml(r.article_no)}조${r.paragraph_no !== "all" ? " 제" + escapeHtml(r.paragraph_no) + "항" : ""} (${escapeHtml(r.article_title)})</span>
+            </div>
+            <div class="card-text">${escapeHtml(r.text)}</div>
+          </div>
+        `;
+      }
+    }
+
+    output.innerHTML = html;
+    return;
+  }
+
+  if (!data.results || data.results.length === 0) {
+    html += '<div class="empty">관련 조항을 찾지 못했습니다.</div>';
+    output.innerHTML = html;
+    return;
+  }
+
+  for (const r of data.results) {
+    html += `
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">${escapeHtml(r.law_name)} 제${escapeHtml(r.article_no)}조${r.paragraph_no !== "all" ? " 제" + escapeHtml(r.paragraph_no) + "항" : ""} (${escapeHtml(r.article_title)})</span>
+          <span class="card-score">관련도 ${r.score}</span>
+        </div>
+        <div class="card-text">${escapeHtml(r.text)}</div>
+      </div>
+    `;
+  }
+
+  output.innerHTML = html;
+}
+
+function linkifyUrls(escapedText) {
+  return escapedText.replace(
+    /(https?:\/\/[^\s<]+)/g,
+    (url) => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`
+  );
+}
+
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = s ?? "";
+  return div.innerHTML;
+}
+</script>
+</body>
+</html>

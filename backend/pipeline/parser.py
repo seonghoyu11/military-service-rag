@@ -32,10 +32,15 @@ def join_wrapped_lines(text):
     (no space) at a physical line break, splitting a word/어절 in two
     (e.g. "사\\n람" -> "사람", "각\\n호의" -> "각호의"). Only merges when both
     neighboring characters are Hangul syllables, and skips cases where the
-    next line starts a 가./나./다. list marker, so structural line breaks
-    between list items are preserved.
+    next line starts a 가./나./다. list marker or a "제N조(...)" article
+    header, so structural boundaries (list items, and -- critically -- the
+    start of the next article) are preserved. Without the article-header
+    exclusion this used to merge e.g. "...재학하는 경우\n제22조(영리활동의
+    범위)..." into "...경우제22조(영리활동의 범위)...", erasing the boundary
+    the downstream article_pattern regex relies on and merging entire
+    articles into one chunk (see docs/eval_results.md, issue 5).
     """
-    return re.sub(r'(?<=[가-힣])\n(?=[가-힣])(?![가-힣]\.\s)', '', text)
+    return re.sub(r'(?<=[가-힣])\n(?=[가-힣])(?![가-힣]\.\s)(?!제\d+조)', '', text)
 
 def parse_standard_law(pdf_path, law_name):
     """
@@ -66,9 +71,18 @@ def parse_standard_law(pdf_path, law_name):
     # Group 1 captures Article No (e.g., 60 or 147조의2)
     # Group 2 captures Article Title (e.g., 병역판정검사 및 입영 등의 연기)
     article_pattern = re.compile(r'(?:^|\n)\s*(제\d+조(?:의\d+)*)\s*\(([^)]+)\)')
-    
+
     articles = []
-    matches = list(article_pattern.finditer(full_text))
+    # A genuine article title never itself contains a "제N조" reference --
+    # only cross-reference qualifiers do (e.g. a numbered list item citing
+    # "법 제46조(법 제54조제1항에서 준용하는 경우를 포함한다)" reads as a header
+    # match otherwise, since the qualifier happens to sit in parens right
+    # after the article number). Filtering those out avoids treating a
+    # citation inside another article's body as a new article boundary.
+    matches = [
+        m for m in article_pattern.finditer(full_text)
+        if not re.search(r'제\d+조', m.group(2))
+    ]
     
     for idx, match in enumerate(matches):
         article_raw_no = match.group(1)
