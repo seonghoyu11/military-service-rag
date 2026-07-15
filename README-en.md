@@ -1,9 +1,9 @@
 # Military Service RAG Chatbot for Overseas Conscripts
 
-An LLM (RAG)-based chatbot designed to provide administrative guidance on military service for overseas Korean conscripts, including permanent residents, international students, dual citizens, and second-generation overseas South Koreans.
-
 > **한국인들을 위한 알림**:
 > 한국어로 된 README는 [README.md](README.md)를 참고하십시오.
+
+An LLM (RAG)-based chatbot designed to provide administrative guidance on military service for overseas Korean conscripts, including permanent residents, international students, dual citizens, and second-generation overseas South Koreans.
 
 > **⚠️⚠️ Disclaimer**
 > This project was developed solely for personal learning and portfolio purposes and is NOT an official service of the Military Manpower Administration (MMA). 
@@ -40,7 +40,7 @@ The South Korean Military Service Act features highly complex cross-references b
                      [Claude API (Haiku 4.5)]
 ```
 
-For a detailed walkthrough, please refer to [`docs/architecture.md`](docs/architecture.md).
+For a detailed walkthrough, please refer to [`docs/architecture-en.md`](docs/architecture-en.md).
 
 ---
 
@@ -105,7 +105,10 @@ npm run dev
 ```
 
 ## Evaluation Results
-Quantitative evaluation metrics (including retrieval accuracy, answer faithfulness, etc.) are thoroughly documented in [docs/eval_results.md](docs/eval_results.md).
+Quantitative evaluation metrics (including retrieval accuracy, answer faithfulness, etc.) are thoroughly documented in [`docs/eval_results-en.md`](docs/eval_results-en.md).
+
+## Development Logs
+Development logs for the project are available in [`docs/devlog-en.md`](docs/devlog-en.md)
 
 ---
 

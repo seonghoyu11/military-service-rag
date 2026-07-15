@@ -1,5 +1,6 @@
 import os
 import json
+import sys
 
 from flask import Blueprint, request, jsonify
 
@@ -148,6 +149,19 @@ def query():
     # boosts below need the full reranked list to have a chance at surfacing
     # a chunk the reranker itself scored outside the top 15.
     reranked = reranker.rerank(question, candidates, top_k=len(candidates))
+
+    # Margin (top1 - top2) diagnostic, logged pre-boost so the directional/anchor
+    # nudges below don't distort the reranker's own confidence signal. Collecting
+    # data to check whether margin separates true-positive from noise queries
+    # better than the absolute LOW_CONFIDENCE_THRESHOLD does -- see eval_results.md.
+    top1_score = reranked[0][1] if reranked else 0.0
+    top2_score = reranked[1][1] if len(reranked) > 1 else 0.0
+    print(
+        f"[margin] query={question!r} top1={top1_score:.4f} top2={top2_score:.4f} "
+        f"margin={top1_score - top2_score:.4f}",
+        file=sys.stderr,
+    )
+
     reranked = _apply_directional_boost(reranked, intent["topic_tags"])
     reranked = _apply_anchor_boost(reranked, intent.get("anchor_lookups"))[:FINAL_TOP_K]
 

@@ -114,6 +114,10 @@ npm run dev
 정량 평가(retrieval 정확도, answer faithfulness 등) 결과는
 [`docs/eval_results.md`](docs/eval_results.md)에 정리되어 있습니다.
 
+## 개발자 노트
+
+개발자 노트가 [`docs/devlog.md`](docs/devlog.md)에 상세히 기록되어 있습니다.
+
 ---
 
 ## License

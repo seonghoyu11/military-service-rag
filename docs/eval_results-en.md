@@ -388,6 +388,148 @@ subsequently closed by adding adverb+verb combination keywords — "늦게 가,"
 "천천히 가," "나중에 가," "최대한 늦게," etc. — to
 `TOPIC_KEYWORDS["연기"]`.)*
 
+## Threshold improvement check: margin (top1-top2) based low-confidence flagging (2026-07-15)
+
+### Background
+
+Issue 2 established that a single absolute score can't cleanly separate real answers
+from noise (a genuine answer at 0.0061 scored lower than a noise case at 0.0147).
+Hypothesis: the **gap between the top-1 and top-2 scores** might be a more reliable
+signal than the absolute score — a real answer should have its top result win by a wide
+margin, while noise results should all cluster together at similarly low scores.
+
+Added margin logging to `routes/query.py` right after the reranker call (before the
+directional/anchor boosts, so those domain-specific nudges don't distort the reranker's
+own confidence signal), then re-ran the final 12 regression queries to collect values.
+
+### Results
+
+| # | Question | Category | top1 | top2 | margin | Absolute threshold (0.05) verdict |
+|---|---|---|---|---|---|---|
+| 1 | Leave of absence while studying abroad | TP | 0.1648 | 0.1072 | 0.0576 | high-conf |
+| 2 | Drop out of foreign university | TP (synonym gap already closed) | 0.0225 | 0.0179 | 0.0046 | low-conf |
+| 3 | Dual national, working a job in Korea | Negative (no real answer in corpus) | 0.0007 | 0.0003 | **0.0004** | low-conf |
+| 4 | PhD program, age limit | TP | 0.2073 | 0.0437 | 0.1636 | high-conf |
+| 5 | Permanent resident, how long can I avoid enlisting | TP | 0.4486 | 0.3120 | 0.1366 | high-conf |
+| 6 | Already served, now getting permanent residency again | out_of_scope | — | — | N/A (reranker never runs) | — |
+| 7 | Dual national, not renouncing citizenship | Negative | 0.0147 | 0.0141 | **0.0006** | low-conf |
+| 8 | Want to delay enlistment | TP (synonym gap patched) | 0.0073 | 0.0059 | 0.0014 | low-conf |
+| 9 | Dad is a company-posted expat | TP | 0.1086 | 0.0715 | 0.0371 | high-conf |
+| 10 | Got permanent residency 2 years ago | TP (weak signal) | 0.0061 | 0.0053 | 0.0008 | low-conf |
+| 11 | Social-service worker, overseas travel | TP | 0.9882 | 0.9583 | 0.0299 | high-conf |
+| 12 | Got into KATUSA, PR application pending | out_of_scope | — | — | N/A (reranker never runs) | — |
+
+**Side finding**: queries 6 and 12 both hit the intent classifier's early `out_of_scope`
+return path, so the reranker is never called and no margin gets logged for them — they
+naturally drop out of the margin comparison (a branch this check hadn't accounted for
+going in).
+
+### Hypothesis check
+
+**Strong true positives (1, 4, 5, 9, 11)**: margins land in the 0.03–0.16 range, clearly
+separated from the noise cases (0.0004–0.0006). But these cases already clear the 0.05
+absolute threshold and were correctly classified `low_confidence=False` without any help
+from margin — margin adds nothing here.
+
+**The low-absolute-score band where the threshold actually struggled (2, 3, 7, 8, 10 —
+all below 0.05)**: ranking by margin within this band puts the noise cases (#3=0.0004,
+#7=0.0006) below the true positives (#10=0.0008, #8=0.0014, #2=0.0046) every time — the
+direction matches the hypothesis. Specifically, re-examining the inversion case that
+motivated this whole check (#10 vs #7): absolute score had it backwards (0.0061 <
+0.0147), but margin puts it back in the right order (0.0008 > 0.0006).
+
+**However**, the margin gap within this band is itself only 0.0002–0.0010 — just as thin
+as the absolute-score gap was. With only 2 noise samples and a 0.0002 margin difference
+between #10 and #7, setting a hard threshold off these 12 queries risks overfitting badly
+— a reranker retrain or slightly different phrasing could easily flip this ordering back.
+
+### Conclusion and next steps
+
+The hypothesis's **direction is supported** (noise margins are consistently smaller than
+true-positive margins, and the problem inversion case gets corrected) — but margin buys
+no extra separation for the strong true positives the absolute threshold already
+handles, and in the low-confidence band where it's actually needed, the gap is too thin
+(~0.0002) to justify a threshold off 5–7 samples. Not implementing a margin condition in
+`low_confidence` for now.
+
+Alternatives to discuss next session (not started now):
+- (a) Collect more labeled queries (at least ~10 each of noise/true-positive) and
+  re-check the margin distribution, or calibrate a logistic regression over absolute
+  score + margin together
+- (b) Replace this judgment call entirely with LLM-based relevance re-verification once
+  Stage 5 (Claude API integration) is done
+
+The margin logging itself (the `[margin]` tag in `routes/query.py`) stays in the code to
+keep collecting data from production traffic.
+
+## Queries 25-28 re-verification + one more evasive-phrasing gap fixed (2026-07-15)
+
+### Background
+
+A prior session (28 stress-test scenarios run locally, never saved as a file in this
+repo) reported that query 25 ("I want to delay enlistment, is there a way?") was being
+classified `topic_tags: ['일반']` with noise-level relevance (0.007–0.01) surfacing as if
+it were a normal answer. Re-opening the same question this session showed it correctly
+classified as `topic_tags: ['연기', '입영연기_신청']`, `low_confidence: False` — the two
+reports conflicted.
+
+### Steps 1-2: clean restart, then actually re-ran queries 25-28
+
+Ruled out a stale process with `pkill -9 -f "app.py"` and a clean restart. The startup
+log confirmed 270 chunks in `law_chunks.json` and `POST_SERVICE_KEYWORDS` count 12 /
+hash=2dc6d7a4 — the same code version as the prior session. Compared the live
+`/api/query` response against `classify()` run standalone, side by side:
+
+| # | Question | topic_tags | low_confidence | top1 article | `/api/query` matches standalone `classify()`? |
+|---|---|---|---|---|---|
+| 25 | Want to delay enlistment, is there a way? | `['연기', '입영연기_신청']` | False | Enforcement Decree Art. 125② (0.2573) | Yes |
+| 26 | Dad is a company-posted expat, do I get a postponement too? | `['연기', '입영연기_신청']` | False | Table 3 (0.3586) | Yes |
+| 27 | I have citizenship elsewhere, can't I just not go back to Korea? | `['일반']` | **True** | Table 3, 0.0123 (irrelevant) | Yes |
+| 28 | I'd like to know how long I can delay it | `['연기', '입영연기_신청']` | False | Enforcement Decree Art. 124① (0.2524) | Yes |
+
+### Step 3: verdict
+
+Query 25 classified correctly on re-test, and the live server response matched the
+standalone `classify()` output exactly, ruling out a deployment-sync issue too. **The
+earlier "fell through to 일반" report doesn't reproduce this session** — there's no way
+to inspect that other session's exact process state now, but the current code behaves
+correctly, so Issue 8 is closed. Query 27, on the other hand, surfaced a **genuine new
+gap**.
+
+### Step 4: fixing the query-27 evasive-phrasing gap
+
+The correct answer to "can't I just not go back to Korea?" is Military Service Act
+Article 70 (the travel-permit obligation itself) and Article 94 (the penalty for
+violating that obligation) — but phrases like "not go back" / "won't return" never use
+legal terms like "evade" or "violation," so they matched neither the `제재` topic
+keywords nor the BM25/dense candidate pool (the same shape as the leave-of-absence/
+drop-out gap). Two changes in `backend/classifier/model.py`:
+
+- Added the evasive-verb phrasing to `TOPIC_KEYWORDS["제재"]`
+- Added two new `SYNONYM_ANCHOR_LOOKUPS` entries with the same keyword set, forcing
+  Military Service Act Articles 70 and 94 into the candidate pool (same pattern as the
+  existing leave-of-absence/drop-out → Article 27 anchor)
+
+**Re-verification** (clean restart, query 27 only):
+
+| | Before | After |
+|---|---|---|
+| topic_tags | `['일반']` | `['제재']` |
+| anchor_lookups | `[]` | Military Service Act Art. 70, Art. 94 |
+| low_confidence | True (0.0123) | **False** |
+| top1 | Table 3 (irrelevant, 0.0123) | Art. 94 (0.3027, anchor boost applied) |
+| top-5 | — | Art. 94 + Art. 70③④⑦②, correctly populated with relevant articles |
+
+Checked the new anchor keywords ("not go back" / "won't return" etc.) against all 12
+existing regression queries' text — no accidental overlaps, so regression risk is low.
+
+### Threshold note
+
+This fix doesn't touch the threshold value at all — it stays within the existing
+advisory approach (`low_confidence` flag only, results still shown) and instead pulls
+the genuinely relevant articles themselves up via anchor force-include + boost.
+`LOW_CONFIDENCE_THRESHOLD = 0.05` is unchanged.
+
 ## Deployment sync issue: "the code is right but the server response doesn't match it" (2026-07-10)
 
 ### Symptom
