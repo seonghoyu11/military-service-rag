@@ -1,7 +1,7 @@
 # 해외체류 병역의무자 안내 챗봇 (Military Service RAG Chatbot)
 
 > **For English Speakers**:
-> Please refer to [README-en.md](README-en.md) for English Information
+> Please refer to [README.md](README.md) for English Information
 
 영주권자, 유학생, 이중국적자, 재외동포 2세 등 해외체류 병역의무자를 위한
 RAG 기반 병역 행정절차 안내 챗봇입니다.

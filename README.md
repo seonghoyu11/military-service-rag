@@ -1,7 +1,7 @@
 # Military Service RAG Chatbot for Overseas Conscripts
 
 > **한국인들을 위한 알림**:
-> 한국어로 된 README는 [README.md](README.md)를 참고하십시오.
+> 한국어로 된 README는 [README-kr.md](README-kr.md)를 참고하십시오.
 
 An LLM (RAG)-based chatbot designed to provide administrative guidance on military service for overseas Korean conscripts, including permanent residents, international students, dual citizens, and second-generation overseas South Koreans.
 
