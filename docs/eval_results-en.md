@@ -608,3 +608,68 @@ Added a one-line startup fingerprint to `app.py`, printed to stderr
 (matches by port) — confirmed in this session that port-based killing can
 leave orphaned processes behind, given the reloader's parent/child process
 structure.
+
+## Final live-server re-verification of queries 25, 27, 28 (2026-07-21)
+
+### Background
+
+The 2026-07-15 session re-verified queries 25/27/28 and patched query 27 (evasive-phrasing
+gap), but that verification happened inside the same session that made the fix -- a
+"self-check right after the change" limitation. This session re-ran the same three queries
+against a freshly, independently clean-restarted server, in a separate session, to confirm
+the documented results actually reproduce.
+
+### Clean restart confirmation
+
+```
+[startup] pid=97494 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+ * Restarting with stat
+[startup] pid=97631 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+```
+
+Confirmed no existing process (`ps aux | grep app.py` only matched the grep itself) after
+`pkill -9 -f "app.py"`, then restarted. Both the parent and child pid match the same
+`hash=2dc6d7a4`, 270 chunks as the 2026-07-15 session -- code/data versions confirmed
+identical.
+
+### `/api/query` re-verification results
+
+| # | Question | topic_tags | anchor_lookups | low_confidence | top1 (boosted) | Matches eval_results.md (07-15)? |
+|---|---|---|---|---|---|---|
+| 25 | "I want to delay enlistment, is there a way?" | `['연기','입영연기_신청']` | `[]` | False | Decree Art. 125(2) (0.2573) | ✅ Matches to 4 decimal places |
+| 27 | "I have citizenship, can I just not go back to Korea?" | `['제재']` | Military Service Act Art. 70, 94 | False | Military Service Act Art. 94 (0.3027) | ✅ Matches to 4 decimal places |
+| 28 | "I want to know how long I can postpone" | `['연기','입영연기_신청']` | `[]` | False | Decree Art. 124(1) (0.2524) | ✅ Matches to 4 decimal places |
+
+All three responses exactly matched the 2026-07-15 session's recorded results -- and since
+no code was touched this session (pure verification only), this rules out both deployment
+sync issues and code regression.
+
+### Additional finding: raw reranker score vs. post-boost final score
+
+The `[margin]` stderr log in `routes/query.py` (logged **before** the anchor/directional
+boosts are applied -- pure cross-encoder score) was captured alongside the results:
+
+```
+[margin] query='저 군대 늦게 가고 싶은데 방법 있나요' top1=0.0073 top2=0.0059 margin=0.0014
+[margin] query='시민권 있는데 그냥 한국 안 들어가면 안 되나요' top1=0.0123 top2=0.0121 margin=0.0003
+[margin] query='언제까지 미룰 수 있는지 궁금해요' top1=0.0024 top2=0.0014 margin=0.0010
+```
+
+The raw top1 scores for all three queries (0.0024-0.0123) are noise-level -- well below
+`LOW_CONFIDENCE_THRESHOLD = 0.05`. Without the anchor boost (+0.3) and directional boost
+(±0.25), all three would have been flagged `low_confidence: true`, and query 27 in
+particular would have surfaced an unrelated article as top1 instead of the correct one
+(per the 07-15 record: pre-patch top1 was an unrelated Table 3 entry, raw score 0.0123).
+
+In other words, this re-verification confirms not just that "the final response is
+correct," but that **the anchor/directional boost mechanism is actually what determines
+correctness for these three cases** -- observed directly at the raw-log level. This is
+one step stronger evidence than the 07-15 record, and matches exactly the thin
+0.0002-0.0014 margin gaps observed in the earlier margin experiment (see "Margin logging,
+2026-07-15" section above).
+
+### Conclusion
+
+All 28 stress-test scenarios (1-28) are now verified against the live server. No action
+items remain here -- next step is Stage 5 (Claude API integration) once the Anthropic API
+key is issued.
