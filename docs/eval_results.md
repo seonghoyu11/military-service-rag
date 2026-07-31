@@ -604,3 +604,160 @@ advisory flag 메커니즘 자체는 정상 동작 확인됨. 배포 동기화 �
 
 **다음 액션 제안**: `SYNONYM_ANCHOR_LOOKUPS`에 영리활동/아르바이트 → 제22조 항목 추가
 검토.
+
+## 이슈 A 수정: "아르바이트" 질문 무관 조항 반환 (2026-07-31)
+
+### 증상
+
+위 "신규 쿼리 7건 라이브 서버 검증"의 #3. "아르바이트하면 문제되나요"가
+`topic_tags: ['영리활동']`로 정확히 분류되는데도, top1이 무관한 시행령
+제147조의2(raw score 0.0008)로 나오고 `low_confidence: true`가 찍혔다. 정답인
+병역의무자 국외여행 업무처리 규정 제22조(영리활동의 범위)는 자연 순위 3위
+(raw score 0.0002, 노이즈 수준)에 그대로 방치됨.
+
+### 원인
+
+`backend/classifier/model.py`의 `SYNONYM_ANCHOR_LOOKUPS`(휴학/자퇴 → 27조,
+회피표현 → 70/94조)에 영리활동/아르바이트 → 22조 항목이 없어서, `routes/query.py`의
+`_apply_anchor_boost`(+0.3)가 이 케이스에서는 아예 발동하지 않았다. 분류기가 토픽을
+맞게 태깅해도 그 태그를 특정 조문으로 연결하는 앵커 메커니즘이 없으면 검색 랭킹에는
+아무 영향이 없다는 것을 재확인.
+
+### 수정
+
+`SYNONYM_ANCHOR_LOOKUPS`에 항목 추가(`backend/classifier/model.py`):
+
+```python
+{
+    "keywords": ["아르바이트", "알바", "파트타임", "영리활동"],
+    "law_name": "병역의무자 국외여행 업무처리 규정",
+    "article_no": "22",
+},
+```
+
+### 코드 흐름 확인
+
+휴학/자퇴 케이스는 정답 청크가 애초에 후보 풀(top_k=40, candidate_pool=50)에도
+못 들어가서 `_inject_anchor_chunks`(강제포함)까지 필요했던 반면, 이번 22조 청크는
+BM25/dense 자연 순위에서 이미 3위로 후보 풀 안에 있었다. 즉 `_inject_anchor_chunks`는
+사실상 no-op(이미 존재하는 청크라 중복 삽입 안 됨)이고, `_apply_anchor_boost`
+(`routes/query.py:70`)가 `anchor_lookups`에 22조가 채워진 뒤 정상적으로 매치되어
++0.3을 더하는 것만으로 top1이 뒤집혔다 — margin 로그(boost 적용 전)와 최종 응답
+점수를 대조해서 실제로 이 경로가 탔음을 확인했다(아래 재검증 결과 참고). threshold나
+boost 크기는 변경하지 않았다.
+
+### 재검증 결과
+
+클린 재시작 확인 (`pkill -9 -f "app.py"` 후 재기동, 좀비 프로세스 없음):
+
+```
+[startup] pid=69673 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+ * Restarting with stat
+[startup] pid=69710 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+```
+
+| 질문 | anchor_lookups | topic_tags | low_confidence (전 → 후) | top1 (전 → 후) |
+|---|---|---|---|---|
+| 아르바이트하면 문제되나요 | `[]` → 22조 | `['영리활동']` (유지) | true → **false** | 147조의2 (raw 0.0008) → **22조 (0.3002)** |
+| 저 알바 좀 오래 해도 되나요 (동의어 회귀) | `[]` → 22조 | `['일반']`* | — → false | — → **22조 (0.3004)** |
+
+\* "알바"는 `TOPIC_KEYWORDS["영리활동"]` 키워드 목록(영리/취업/생업/아르바이트)에
+없어서 topic_tags는 `일반`으로 남지만, `SYNONYM_ANCHOR_LOOKUPS` 앵커는 별도
+키워드 목록이라 "알바"를 잡아서 결과 랭킹은 정상적으로 22조가 top1이 됨. topic_tags
+표시만 부정확하고(마이너 갭, UI 인텐트 라벨용) 실제 검색 결과에는 영향 없음 —
+이번 이슈 범위 밖이라 별도 트래킹만 하고 수정하지 않음.
+
+margin 로그(boost 적용 전, raw 점수 — boost 후 결과와 대조용):
+
+```
+[margin] query='아르바이트하면 문제되나요' top1=0.0008 top2=0.0002 margin=0.0006
+[margin] query='저 알바 좀 오래 해도 되나요' top1=0.0004 top2=0.0001 margin=0.0003
+```
+
+raw top1(0.0008, 0.0004)이 모두 22조의 boost 후 점수(0.3002, 0.3004)보다 한참 낮다 —
+즉 앵커 매치가 없었다면 여전히 무관한 조항이 top1으로 남았을 것이고, `_apply_anchor_boost`가
+실제로 이 케이스의 랭킹 역전을 만든 것이 raw 로그 레벨에서 확인됨.
+
+### 회귀 확인
+
+기존 anchor 케이스 및 연기/영주권 계열 쿼리를 동일 서버에서 재실행 — 전부 이전
+기록과 점수까지 동일, 회귀 없음.
+
+| 질문 | anchor_lookups | top1 | 이전 기록과 일치 |
+|---|---|---|---|
+| 유학 중인데 휴학하면 입영연기가 취소되나요 | 27조 | 27조③ (0.5618) | ✅ |
+| 외국 대학 자퇴하면 병역은 어떻게 되나요 | 27조 | 27조③ (0.3014) | ✅ |
+| 그냥 한국 안 들어가면 안 되나요 | 70조, 94조 | 94조 (0.3044) | ✅ |
+| 영주권자인데 언제까지 입영 안 해도 되나요 | `[]` | 별표3 (0.3092) | ✅ |
+
+### 결론
+
+이슈 A 해결 완료. `_apply_anchor_boost`가 22조 케이스에서 정상 발동함을 raw/boosted
+점수 대조로 확인했고, 기존 anchor 케이스 4건 모두 회귀 없음. topic_tags가 "알바"
+동의어를 못 잡는 마이너 갭 하나를 추가로 발견했으나 검색 결과 정확도에는 영향이
+없어 이번 수정 범위에서는 제외.
+
+## 이슈 B 수정: `low_confidence` 플래그가 프론트에 표시되지 않음 (2026-07-31)
+
+### 증상
+
+`routes/query.py`는 `low_confidence: true`일 때 재질문을 유도하는
+`low_confidence_notice` 문구까지 응답 JSON에 정확히 담아 보내지만,
+`frontend/prototype.html`의 `render(data)` 함수가 이 두 필드를 전혀 참조하지
+않아 화면에 아무 표시도 되지 않았다. 그 결과 관련도가 노이즈 수준(예:
+raw score 0.0007)인 결과도 확정 답변처럼 보이는 문제가 있었다.
+
+### 수정
+
+`frontend/prototype.html`에 두 가지 변경:
+
+1. `<style>`에 `.low-conf` 클래스 신설 — 기존 `.oos`(스코프 밖 안내, 주황 톤)와
+   시각적으로 구분되도록 파란/남색 계열 배경 + 좌측 강조 보더로 별도 톤 지정.
+2. `render(data)`에서 `data.results` 카드 렌더링 직전(out_of_scope 분기와 빈 결과
+   분기를 모두 통과한 뒤), `data.low_confidence && data.low_confidence_notice`일
+   때만 `escapeHtml`을 거친 `.low-conf` 안내 박스를 삽입.
+
+```javascript
+if (data.low_confidence && data.low_confidence_notice) {
+  html += `<div class="low-conf">${escapeHtml(data.low_confidence_notice)}</div>`;
+}
+```
+
+### 재검증
+
+이 환경에는 헤드리스 브라우저 바이너리가 없어(Chrome/Chromium/Playwright 미설치,
+`safaridriver`는 있으나 selenium 미설치) GUI 스크린샷 대신, `prototype.html`에서
+실제 `<script>` 내용을 그대로 추출해 Node `vm` 컨텍스트에서 실행하고, `document`는
+`textContent → innerHTML` 변환 시 브라우저 텍스트 노드 직렬화 규칙(`&`→`&amp;`,
+`<`→`&lt;`, `>`→`&gt;`, 따옴표는 비이스케이프 — 실제 브라우저 동작과 동일)만 구현한
+최소 스텁으로 대체해 `render()`/`escapeHtml()`을 실제 코드 그대로 실행했다. 라이브
+서버(클린 재시작 상태 유지, pid 69673/69710)에서 받은 실제 API 응답을 그대로
+입력값으로 사용했다.
+
+1. **저신뢰 케이스**: 이슈 A 패치로 "아르바이트하면 문제되나요"는 더 이상
+   low_confidence가 아니게 돼서, 대체 쿼리 "이중국적인데 한국에서 취업하면
+   불이익 있나요"로 테스트.
+   - 실제 서버 응답: `low_confidence: true`, `low_confidence_notice`: "검색
+     결과의 확신도가 낮습니다. 질문을 더 구체적으로 작성하시거나 표현을 바꿔서
+     다시 시도해 보세요. 아래 결과는 참고용입니다."
+   - `render()` 실행 결과: `output.innerHTML`에 `<div class="low-conf">` 박스가
+     생성되고, 내용이 원문 그대로(특수문자 없어 이스케이프 변화 없음) 표시됨. ✅
+2. **고신뢰 회귀 케이스**: "사회복무요원인데 해외 갈 수 있나요"
+   - 실제 서버 응답: `low_confidence: false`, top1 = 시행령 135조 (0.9882)
+   - `render()` 실행 결과: `.low-conf` 박스 없음 — 오탐 없음 확인. ✅
+3. **XSS 이스케이프 확인**: 실제 응답 JSON을 복제한 뒤 `low_confidence_notice`를
+   `<script>alert(1)</script> "onload=alert(2)" & <img src=x onerror=alert(3)>`로
+   치환해 재실행.
+   - 결과: `&lt;script&gt;alert(1)&lt;/script&gt; "onload=alert(2)" &amp;
+     &lt;img src=x onerror=alert(3)&gt;` — `<`/`>`/`&`가 전부 이스케이프되어
+     태그로 해석될 수 없음을 확인. (따옴표는 텍스트 노드 안에서는 이스케이프
+     불필요 — 속성 컨텍스트가 아니므로 XSS 벡터 아님, 기존 `.oos` 렌더링에
+     쓰이는 동일 `escapeHtml()` 함수라 보안 특성도 동일)
+
+### 결론
+
+이슈 B 해결 완료. `low_confidence`/`low_confidence_notice`가 실제 코드 실행
+결과로 정상 렌더링됨을 확인했고, 고신뢰 케이스에서 오탐 없음, 악성 페이로드도
+안전하게 이스케이프됨을 확인했다. 다만 GUI 헤드리스 브라우저가 아닌 Node `vm` +
+DOM 스텁 방식으로 검증했다는 점은 한계로 남겨둔다 — 이 환경에 Chrome/Playwright가
+설치되면 실제 스크린샷 기반 재검증을 추천.

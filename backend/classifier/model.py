@@ -123,6 +123,11 @@ SYNONYM_ANCHOR_LOOKUPS = [
         "law_name": "병역법",
         "article_no": "94",
     },
+    {
+        "keywords": ["아르바이트", "알바", "파트타임", "영리활동"],
+        "law_name": "병역의무자 국외여행 업무처리 규정",
+        "article_no": "22",
+    },
 ]
 
 # Deliberately out of the RAG dataset (see memory: project-katusa-scope-exclusion) --
