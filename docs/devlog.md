@@ -212,10 +212,29 @@ Claude API 키 발급 대기가 길어지는 김에, 이슈 2(threshold)에서 �
 질문(카투사, 전역 이후 시점 등)은 reranker 자체가 호출되지 않아서 margin 로깅이
 발동하지 않는다 — margin 데이터를 모을 때 이 분기를 감안해야 한다.
 
+## 5단계 LLM 전환: Anthropic Claude → Google Gemini (2026-07-31)
+
+Claude API는 사용하려면 결제수단 등록(선결제 크레딧)이 필요해서 개발 착수가 계속
+미뤄지고 있었다. Google Gemini API(Google AI Studio, `GOOGLE_API_KEY`)는 카드 등록
+없이 무료 티어로 바로 개발을 시작할 수 있어서 5단계 LLM을 Gemini Flash로 전환하기로
+결정했다.
+
+이 전환이 리스크가 낮다고 판단한 근거: 이 프로젝트의 "판단" 역할(유저타입/의도 분류,
+근거조항 검색·랭킹, 신뢰도 판정)은 이미 4단계까지의 rule-based 파이프라인이 전담하고
+있고, LLM은 검색된 근거조항 텍스트를 citation과 함께 자연어로 종합·생성하는 역할만
+맡는다. 즉 모델 교체가 정확도의 핵심 로직에는 영향을 주지 않고, 생성 품질(문장 자연스러움,
+citation 형식 준수, grounding 충실도)만 재검증하면 되는 구조라 전환 비용이 작다.
+
+무료 티어 특성상 과금이 발생하면 안 된다는 제약이 새로 생겨서, 모델명 화이트리스트
+하드코딩(`gemini-2.5-flash`/`gemini-2.5-flash-lite`만 허용, Pro 계열 차단), Vertex AI
+경로 미사용(Google AI Studio 경로만), rate limit 초과 시 무한 재시도 대신 최대 재시도
+횟수 제한 같은 안전장치를 코드에 넣었다. 상세 구현·검증 결과는
+`docs/eval_results.md`의 "Stage 5: Gemini Flash 답변 생성 검증" 섹션 참고.
+
 ## 남은 과정
 
-- **5단계 (진행 중 대기)**: Claude API 연동 — Anthropic API 키 발급 대기 중이라 보류.
-  검색된 근거조항 + 질문 → 자연어 답변 생성 (판단은 rule-based, LLM은 종합·생성 역할만).
+- **5단계 (진행 중)**: Google Gemini API 연동 — 검색된 근거조항 + 질문 → 자연어
+  답변 생성 (판단은 rule-based, LLM은 종합·생성 역할만).
 - **6단계**: Flask API 정식화(`/api/profile`, `/api/feedback`) + RAGAS 평가
   (5단계 완료 후 answer faithfulness 측정 가능).
 - **7단계**: Next.js 프론트 — next-intl 한/영 토글 필수 (재외국민 타겟이라서).

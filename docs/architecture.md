@@ -9,7 +9,7 @@
                           v
               [Hybrid Retrieval: BM25 + Dense + Reranker]
                           v
-                  [Claude API (Haiku 4.5)] -> 근거조항 citation 포함 답변
+                  [Google Gemini API (Gemini 3.5 Flash)] -> 근거조항 citation 포함 답변
 ```
 
 ## 스코프
@@ -62,8 +62,12 @@
   키워드를 보강해서 대응. 암묵적 문맥(예: 이전 질문에서 언급된 영주권자라는 정보가 후속 질문에는
   없는 경우)은 규칙 기반 분류기의 한계로 남겨둠 — 계획대로 데이터가 쌓이면 경량 분류기로 교체 예정
 
-### 5단계 이후: 미착수
-Claude API 연동, Flask API, Next.js 프론트 — 계획대로 순서대로 진행 예정.
+### 5단계: 답변 생성 (Google Gemini API) — 진행 중
+Anthropic Claude API에서 Google Gemini API로 전환 결정 (전환 사유는 `docs/devlog.md` 참고).
+`generation/answer.py`에서 근거조항 텍스트만을 근거로 citation 포함 답변 생성.
+
+### 6~7단계 이후: 미착수
+Flask API 마무리, Next.js 프론트(7단계, next-intl 한/영 토글 포함) — 계획대로 순서대로 진행 예정.
 
 ## 스코프 결정 사항
 - **카투사/어학병 등 모집병**: 데이터셋에 포함하지 않기로 결정 (지원자격이 법조문이 아니라 매년

@@ -673,3 +673,266 @@ one step stronger evidence than the 07-15 record, and matches exactly the thin
 All 28 stress-test scenarios (1-28) are now verified against the live server. No action
 items remain here -- next step is Stage 5 (Claude API integration) once the Anthropic API
 key is issued.
+
+## 7 new queries: live-server verification (2026-07-30)
+
+### Background
+
+Re-verifying at the HTTP level whether issues diagnosed in earlier sessions
+(postponement/cancellation directionality, forced anchor inclusion, the threshold
+advisory flag, etc.) are actually reflected in the running server. Not a standalone
+script -- direct POST requests to `/api/query` against a live Flask server.
+
+### Clean restart check
+
+```
+[startup] pid=62665 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+ * Restarting with stat
+[startup] pid=62739 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+```
+
+`pkill -9 -f "app.py"` killed nothing (exit code 1, no process was running) before
+restarting with `python3 app.py`. Both the parent (62665) and child (62739) pids report
+the same `hash=2dc6d7a4`, 270 chunks, and an mtime matching the real `law_chunks.json`
+file mtime (1783695411) -- confirmed no zombie process or stale module load.
+
+### `/api/query` re-verification results
+
+| # | Question | topic_tags | user_type_tags | anchor_lookups | low_confidence | top1 (boosted) | Verdict |
+|---|---|---|---|---|---|---|---|
+| 1 | Leave of absence while studying abroad -- does my postponement get cancelled? | `['허가취소','연기','입영연기_신청']` | -- | Overseas Travel regulation Art. 27 | False | Art. 27③ (0.5618) | ✅ PASS |
+| 2 | Withdrew from a foreign university -- what happens to my service obligation? | `['일반']` | `['전체']` | Overseas Travel regulation Art. 27 | False | Art. 27③ (0.3014) | ✅ PASS |
+| 3 | Is it a problem if I have a part-time job? | `['영리활동']` | `['전체']` | `[]` | True | Enforcement Decree Art. 147-2 (0.0008) | ❌ FAIL |
+| 4 | I'm a PhD student -- am I recognized as an international student too? | `['일반']` | `['유학생']` | `[]` | True | Enforcement Decree Art. 147 (0.0245) | ✅ PASS |
+| 5 | I can't stay in Korea for 6+ months because I need to maintain my green card -- is that a problem? | `['일반']` | `['영주권자']` | `[]` | **False** | Overseas Travel regulation Art. 24 (0.0995) | ⚠️ PARTIAL |
+| 6 | I'm a permanent resident -- until when can I avoid enlisting? | `['연기','입영연기_신청']` | `['영주권자']` | `[]` | False | Table 3 (0.3092) | ✅ PASS |
+| 7 | What if I just don't go back to Korea? | `['제재']` | `['전체']` | Military Service Act Art. 70, 94 | False | Military Service Act Art. 94 (0.3044) | ✅ PASS |
+
+Margin log (pre-boost, raw cross-encoder scores):
+
+```
+[margin] query='유학 중인데 휴학하면 입영연기가 취소되나요' top1=0.1648 top2=0.1072 margin=0.0576
+[margin] query='외국 대학 자퇴하면 병역은 어떻게 되나요' top1=0.0225 top2=0.0179 margin=0.0046
+[margin] query='아르바이트하면 문제되나요' top1=0.0008 top2=0.0002 margin=0.0006
+[margin] query='박사과정 중인데 저도 유학생으로 인정되나요' top1=0.0245 top2=0.0066 margin=0.0179
+[margin] query='영주권 유지하려고 한국에 6개월 넘게 못 있는데 문제없나요' top1=0.0995 top2=0.0965 margin=0.0030
+[margin] query='영주권자인데 언제까지 입영 안 해도 되나요' top1=0.4486 top2=0.3120 margin=0.1366
+[margin] query='그냥 한국 안 들어가면 안 되나요' top1=0.0082 top2=0.0073 margin=0.0008
+```
+
+### Root-cause analysis for the failed/partial cases
+
+**#3 FAIL -- a logic gap, not a deployment sync issue.** The classifier correctly tags
+the `영리활동` (for-profit activity) topic (`classifier/model.py`'s
+`TOPIC_KEYWORDS["영리활동"]`), but there's no anchor/boost mechanism connecting that tag
+to the specific article (Art. 22, scope of for-profit activity). `SYNONYM_ANCHOR_LOOKUPS`
+(`classifier/model.py:101-126`) only has entries for leave-of-absence/withdrawal (Art. 27)
+and evasive phrasing (Art. 70/94) -- nothing for for-profit-activity/part-time-job.
+`_apply_directional_boost` (`routes/query.py:53`) only reacts to
+`DIRECTIONAL_TAGS = {"입영연기_신청","입영연기_취소"}`, and
+`_apply_anchor_boost`/`_inject_anchor_chunks` do nothing when `anchor_lookups` is an empty
+list. As a result Art. 22 (raw score 0.0002, ranked 3rd among candidates) is left with no
+forced inclusion or boost, and the unrelated Art. 147-2 (overseas-travel-permit
+revocation) stays top1. In short: the anchor-forcing mechanism from Issue 1 was scoped
+only to the "leave of absence/withdrawal" and "evasive phrasing" cases, and was never
+extended to the part-time-job/for-profit-activity case. The code reproduced exactly as
+it's actually running, so this isn't a deployment sync problem -- it's a pure
+functionality gap.
+
+**#5 PARTIAL -- a known, already-documented design limitation (consistent with
+Issue 2).** `low_confidence` is an absolute cutoff:
+`reranked[0][1] < LOW_CONFIDENCE_THRESHOLD(0.05)` (`routes/query.py:168`). This query's
+top1 (raw 0.0995) clears the threshold, so `low_confidence=False` gets set, but its
+margin over top2 (0.0965) is only 0.0030 -- the same "noise-level" gap as #3 (0.0006) or
+#7 (0.0008). In other words, the absolute score alone can't tell whether this case is a
+genuine answer or an ambiguous match that happened to clear the threshold. This isn't a
+new bug; it's the same unresolved issue already concluded in the "Threshold improvement
+check: margin (top1-top2) based low-confidence flagging (2026-07-15)" section above -- the
+advisory-flag mechanism itself (not a hard cutoff) was confirmed working correctly in #3
+(low_confidence=true fired, but results were still returned); it's just that the threshold
+criterion doesn't account for margin, and that pre-existing limitation resurfaced here
+too.
+
+### Conclusion
+
+5 of 7 (#1, 2, 4, 6, 7) PASS. #3 is a newly-discovered pure logic gap from the anchor
+mechanism's limited scope (Issue 1 needs to be extended). #5 is a reproduction of the
+already-documented threshold-vs-margin limitation, with the advisory-flag mechanism itself
+confirmed working correctly. No deployment sync issue or code regression was found -- the
+startup fingerprint (270 chunks, hash=2dc6d7a4) matched on both the parent and child
+process, and every response was fully explainable by the current code logic.
+
+**Suggested next action**: consider adding a for-profit-activity/part-time-job -> Art. 22
+entry to `SYNONYM_ANCHOR_LOOKUPS`.
+
+## Issue A fix: "part-time job" question returned an unrelated article (2026-07-31)
+
+### Symptom
+
+Item #3 from "7 new queries: live-server verification" above. "Is it a problem if I have a
+part-time job?" was correctly classified as `topic_tags: ['영리활동']`, but top1 came back
+as the unrelated Enforcement Decree Art. 147-2 (raw score 0.0008) with
+`low_confidence: true`. The correct answer -- Overseas Travel regulation Art. 22 (scope of
+for-profit activity) -- was left at its natural rank of 3rd (raw score 0.0002, noise
+level).
+
+### Root cause
+
+`backend/classifier/model.py`'s `SYNONYM_ANCHOR_LOOKUPS` (leave-of-absence/withdrawal ->
+Art. 27, evasive phrasing -> Art. 70/94) had no entry for for-profit-activity/part-time-job
+-> Art. 22, so `routes/query.py`'s `_apply_anchor_boost` (+0.3) never fired for this case
+at all. Re-confirmed: even when the classifier tags the topic correctly, if there's no
+anchor mechanism linking that tag to a specific article, it has zero effect on the
+retrieval ranking.
+
+### Fix
+
+Added an entry to `SYNONYM_ANCHOR_LOOKUPS` (`backend/classifier/model.py`):
+
+```python
+{
+    "keywords": ["아르바이트", "알바", "파트타임", "영리활동"],
+    "law_name": "병역의무자 국외여행 업무처리 규정",
+    "article_no": "22",
+},
+```
+
+### Code-path verification
+
+In the leave-of-absence/withdrawal case, the correct chunk didn't even make it into the
+candidate pool (top_k=40, candidate_pool=50) in the first place, which is why
+`_inject_anchor_chunks` (forced inclusion) was needed. This Art. 22 chunk, by contrast,
+was already ranked 3rd naturally by BM25/dense and therefore already inside the candidate
+pool. So `_inject_anchor_chunks` is effectively a no-op here (the chunk already exists, so
+nothing gets duplicated), and it was `_apply_anchor_boost` (`routes/query.py:70`) alone --
+correctly matching once Art. 22 populated `anchor_lookups` and adding +0.3 -- that flipped
+top1. Cross-referencing the margin log (pre-boost) against the final boosted score
+confirms this exact code path actually fired (see the re-verification results below).
+Neither the threshold nor the boost magnitude was changed.
+
+### Re-verification results
+
+Clean restart check (`pkill -9 -f "app.py"` then restart, no zombie processes):
+
+```
+[startup] pid=69673 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+ * Restarting with stat
+[startup] pid=69710 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+```
+
+| Question | anchor_lookups | topic_tags | low_confidence (before → after) | top1 (before → after) |
+|---|---|---|---|---|
+| Is it a problem if I have a part-time job? (아르바이트하면 문제되나요) | `[]` → Art. 22 | `['영리활동']` (unchanged) | true → **false** | Art. 147-2 (raw 0.0008) → **Art. 22 (0.3002)** |
+| "저 알바 좀 오래 해도 되나요" (synonym regression, "can I work a part-time job for a long time?") | `[]` → Art. 22 | `['일반']`* | -- → false | -- → **Art. 22 (0.3004)** |
+
+\* "알바" (informal for "part-time job") isn't in `TOPIC_KEYWORDS["영리활동"]`'s keyword
+list (영리/취업/생업/아르바이트), so `topic_tags` still comes back `일반` (general) --
+but `SYNONYM_ANCHOR_LOOKUPS` uses a separate keyword list that does catch "알바", so the
+retrieval ranking still correctly puts Art. 22 at top1. Only the topic_tags label is
+inaccurate (a minor gap, cosmetic for the UI intent label) with zero impact on actual
+retrieval results -- out of scope for this fix, tracked separately without patching it.
+
+Margin log (pre-boost, raw scores -- for comparison against the boosted results):
+
+```
+[margin] query='아르바이트하면 문제되나요' top1=0.0008 top2=0.0002 margin=0.0006
+[margin] query='저 알바 좀 오래 해도 되나요' top1=0.0004 top2=0.0001 margin=0.0003
+```
+
+The raw top1 scores (0.0008, 0.0004) are both far below Art. 22's post-boost scores
+(0.3002, 0.3004) -- i.e., without the anchor match, an unrelated article would still be
+sitting at top1. This confirms at the raw-log level that `_apply_anchor_boost` is what
+actually flipped the ranking for this case.
+
+### Regression check
+
+Re-ran the existing anchor cases plus the postponement/permanent-resident family of
+queries on the same server -- everything matched the prior record down to the score, no
+regressions.
+
+| Question | anchor_lookups | top1 | Matches prior record? |
+|---|---|---|---|
+| Leave of absence while studying abroad -- does my postponement get cancelled? | Art. 27 | Art. 27③ (0.5618) | ✅ |
+| Withdrew from a foreign university -- what happens to my service obligation? | Art. 27 | Art. 27③ (0.3014) | ✅ |
+| What if I just don't go back to Korea? | Art. 70, 94 | Art. 94 (0.3044) | ✅ |
+| I'm a permanent resident -- until when can I avoid enlisting? | `[]` | Table 3 (0.3092) | ✅ |
+
+### Conclusion
+
+Issue A resolved. Confirmed `_apply_anchor_boost` correctly fires for the Art. 22 case via
+the raw-vs-boosted score comparison, and all 4 pre-existing anchor cases show no
+regression. Additionally found a minor gap where topic_tags doesn't catch the "알바"
+synonym, but since it has no effect on retrieval accuracy, it was left out of this fix's
+scope.
+
+## Issue B fix: the `low_confidence` flag wasn't shown in the frontend at all (2026-07-31)
+
+### Symptom
+
+`routes/query.py` correctly includes a `low_confidence_notice` message (prompting the user
+to rephrase) in the response JSON whenever `low_confidence: true`, but
+`frontend/prototype.html`'s `render(data)` function never referenced either field, so
+nothing showed up on screen. As a result, even noise-level results (e.g. raw score 0.0007)
+looked like confident, settled answers.
+
+### Fix
+
+Two changes to `frontend/prototype.html`:
+
+1. Added a new `.low-conf` class in `<style>` -- given a distinct blue/navy tone with a
+   left accent border, visually distinct from the existing `.oos` (out-of-scope notice,
+   orange tone).
+2. In `render(data)`, right before rendering the `data.results` cards (after both the
+   out-of-scope branch and the empty-results branch), insert an escaped `.low-conf` notice
+   box whenever `data.low_confidence && data.low_confidence_notice`.
+
+```javascript
+if (data.low_confidence && data.low_confidence_notice) {
+  html += `<div class="low-conf">${escapeHtml(data.low_confidence_notice)}</div>`;
+}
+```
+
+### Re-verification
+
+This environment has no headless-browser binary available (no Chrome/Chromium/Playwright
+installed; `safaridriver` exists but selenium doesn't), so instead of a GUI screenshot, the
+actual `<script>` content was extracted verbatim from `prototype.html` and run inside a
+Node `vm` context, with `document` replaced by a minimal stub that only implements the
+browser's `textContent -> innerHTML` text-node serialization rules (`&`->`&amp;`,
+`<`->`&lt;`, `>`->`&gt;`, quotes left un-escaped -- matching real browser behavior). This
+ran `render()`/`escapeHtml()` exactly as written. Real API responses were captured from the
+live server (clean-restarted, pid 69673/69710) and fed in as-is.
+
+1. **Low-confidence case**: since Issue A's fix means "Is it a problem if I have a
+   part-time job?" is no longer low-confidence, tested instead with "I have dual
+   citizenship -- would working in Korea count against me?" (이중국적인데 한국에서
+   취업하면 불이익 있나요).
+   - Actual server response: `low_confidence: true`, `low_confidence_notice`: "The
+     search result's confidence is low. Please rephrase your question or make it
+     more specific and try again. The results below are for reference only."
+   - `render()` output: `output.innerHTML` contained a generated
+     `<div class="low-conf">` box, with the notice text unchanged (no special
+     characters, so escaping made no visible difference). ✅
+2. **High-confidence regression case**: "I'm a public-service worker (사회복무요원) --
+   can I travel abroad?"
+   - Actual server response: `low_confidence: false`, top1 = Enforcement Decree
+     Art. 135 (0.9882)
+   - `render()` output: no `.low-conf` box -- confirmed no false positive. ✅
+3. **XSS-escaping check**: cloned an actual response and swapped
+   `low_confidence_notice` for
+   `<script>alert(1)</script> "onload=alert(2)" & <img src=x onerror=alert(3)>`,
+   then re-ran.
+   - Result: `&lt;script&gt;alert(1)&lt;/script&gt; "onload=alert(2)" &amp;
+     &lt;img src=x onerror=alert(3)&gt;` -- confirmed `<`/`>`/`&` are all escaped,
+     so the payload can't be interpreted as a tag. (Quotes don't need escaping
+     inside a text node -- it's not an attribute context, so it's not an XSS
+     vector; this is the same `escapeHtml()` function already used to render
+     `.oos`, so the security properties are identical.)
+
+### Conclusion
+
+Issue B resolved. Confirmed `low_confidence`/`low_confidence_notice` render correctly by
+actually executing the real code, confirmed no false positive on the high-confidence case,
+and confirmed malicious payloads are safely escaped. One caveat: this was verified via
+Node `vm` + a DOM stub rather than a real headless-browser GUI -- if Chrome/Playwright
+becomes available in this environment, a screenshot-based re-verification is recommended.

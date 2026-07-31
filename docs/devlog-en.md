@@ -285,12 +285,33 @@ A side finding along the way: questions the intent classifier flags `out_of_scop
 (KATUSA, post-discharge timing, etc.) never reach the reranker, so no margin gets logged
 for them — worth remembering when collecting margin data going forward.
 
+## Stage 5 LLM switch: Anthropic Claude → Google Gemini (2026-07-31)
+
+The Claude API requires registering a payment method (prepaid credit) before it can be
+used, which kept stalling the start of Stage 5. The Google Gemini API (Google AI Studio,
+`GOOGLE_API_KEY`) offers a free tier usable without a card on file, so Stage 5's LLM was
+switched to Gemini Flash.
+
+This switch is low-risk because the "judgment" work in this project — user-type/intent
+classification, article retrieval and ranking, confidence gating — is already fully owned
+by the rule-based pipeline built through Stage 4. The LLM's only job is synthesizing the
+retrieved article text into a natural-language answer with citations. Swapping the model
+doesn't touch the accuracy-critical logic; only generation quality (fluency, citation
+format compliance, grounding faithfulness) needed re-verification, which kept the
+migration cost small.
+
+The free tier comes with a new constraint — no billing may ever occur — so the code adds
+guardrails: a hardcoded model whitelist (only `gemini-2.5-flash`/`gemini-2.5-flash-lite`,
+Pro-tier models blocked), no Vertex AI code path (Google AI Studio only), and a capped
+retry count instead of unbounded retries on rate-limit errors. Full implementation and
+verification details are in the "Stage 5: Gemini Flash answer-generation verification"
+section of `docs/eval_results-en.md`.
+
 ## What's left
 
-- **Stage 5 (currently blocked)**: Claude API integration — waiting on an
-  Anthropic API key. Retrieved articles + question → natural-language
-  answer generation (eligibility judgment stays rule-based; the LLM's job
-  is synthesis only).
+- **Stage 5 (in progress)**: Google Gemini API integration — retrieved
+  articles + question → natural-language answer generation (eligibility
+  judgment stays rule-based; the LLM's job is synthesis only).
 - **Stage 6**: formalize the Flask API (`/api/profile`, `/api/feedback`) +
   RAGAS evaluation (needs Stage 5 done first, to measure answer
   faithfulness).

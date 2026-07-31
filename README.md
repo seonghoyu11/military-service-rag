@@ -20,7 +20,7 @@ The South Korean Military Service Act features highly complex cross-references b
 - Intent Classifier: Classifies user types and question intent upfront as a primary filter.
 - BM25 + Dense Embedding Hybrid Search
 - Reranker: Sorts and optimizes the final retrieved source articles.
-- Claude API: Generates responses that include precise citations of the supporting articles.
+- Google Gemini API: Generates responses that include precise citations of the supporting articles.
 - RAGAS-based Quantitative Evaluation
 
 **Scope**: Administrative procedures from the inception of military service obligation up to the point prior to enlistment (reflecting the user's current non-enlisted status).
@@ -37,7 +37,7 @@ The South Korean Military Service Act features highly complex cross-references b
                              ↓
              [Hybrid Retrieval: BM25 + Dense + Reranker]
                              ↓
-                     [Claude API (Haiku 4.5)]
+                     [Google Gemini API (Gemini 3.5 Flash)]
 ```
 
 For a detailed walkthrough, please refer to [`docs/architecture-en.md`](docs/architecture-en.md).
@@ -54,7 +54,7 @@ For a detailed walkthrough, please refer to [`docs/architecture-en.md`](docs/arc
 | Retrieval | rank_bm25 (BM25) + Dense Hybrid |
 | Reranker | bge-reranker-v2-m3 |
 | Classifier | KoBERT/KoELECTRA + linear head |
-| LLM | Anthropic API (Claude Haiku 4.5) |
+| LLM | Google Gemini API (Gemini 3.5 Flash) |
 | Frontend | Next.js, next-intl (영/한 토글) |
 | Evaluation | RAGAS |
 
@@ -79,7 +79,7 @@ backend/
 ├── pipeline/       # Parsing → Chunking → Tagging → Embedding
 ├── retrieval/      # BM25 / Dense / Hybrid / Reranker logic
 ├── classifier/     # Intent classifier training and inference
-├── llm/            # Claude API integration wrapper
+├── generation/      # Gemini API answer generation wrapper
 ├── routes/         # Flask API endpoints
 ├── db/             # MongoDB connection setup
 └── evaluation/     # RAGAS-based quantitative evaluation
@@ -95,7 +95,7 @@ docs/               # Architecture deep-dives & evaluation reports
 # Backend
 cd backend
 pip install -r requirements.txt --break-system-packages
-cp .env.example .env   # Fill in your ANTHROPIC_API_KEY and MONGO_URI
+cp .env.example .env   # Fill in your GOOGLE_API_KEY and MONGO_URI
 python app.py
 
 # Frontend

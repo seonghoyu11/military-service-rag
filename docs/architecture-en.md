@@ -9,7 +9,7 @@
                           v
               [Hybrid Retrieval: BM25 + Dense + Reranker]
                           v
-                  [Claude API (Haiku 4.5)] -> answer with cited articles
+                  [Google Gemini API (Gemini 3.5 Flash)] -> answer with cited articles
 ```
 
 ## Scope
@@ -92,9 +92,14 @@ eligibility table).
   addressed by swapping in a lightweight trained classifier once enough
   labeled query data accumulates, per the original plan.
 
-### Stage 5 onward: Not started
-Claude API integration, Flask API, Next.js frontend — to be built in order per
-the plan.
+### Stage 5: Answer generation (Google Gemini API) — In progress
+Switched from the Anthropic Claude API to the Google Gemini API (rationale in
+`docs/devlog-en.md`). `generation/answer.py` generates citation-bearing answers
+grounded strictly in the retrieved article text.
+
+### Stage 6 onward: Not started
+Finishing the Flask API, Next.js frontend (stage 7, including the next-intl
+EN/KO toggle) — to be built in order per the plan.
 
 ## Scope decisions
 - **KATUSA / language-soldier recruitment**: deliberately excluded from the

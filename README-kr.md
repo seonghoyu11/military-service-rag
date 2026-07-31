@@ -25,7 +25,7 @@ RAG 기반 병역 행정절차 안내 챗봇입니다.
 - Intent Classifier로 유저 유형·질문 목적 1차 분류
 - BM25 + Dense Embedding 하이브리드 검색
 - Reranker로 최종 근거조항 정렬
-- Claude API로 근거조항 citation 포함 답변 생성
+- Google Gemini API로 근거조항 citation 포함 답변 생성
 - RAGAS 기반 정량 평가
 
 **스코프**: 병역의무 발생 ~ 입영 전까지의 행정절차 (본인 미입영 상태 반영)
@@ -42,7 +42,7 @@ RAG 기반 병역 행정절차 안내 챗봇입니다.
                           ↓
               [Hybrid Retrieval: BM25 + Dense + Reranker]
                           ↓
-                  [Claude API (Haiku 4.5)]
+                  [Google Gemini API (Gemini 3.5 Flash)]
 ```
 
 자세한 설명은 [`docs/architecture.md`](docs/architecture.md) 참고.
@@ -59,7 +59,7 @@ RAG 기반 병역 행정절차 안내 챗봇입니다.
 | 검색 | rank_bm25 (BM25) + Dense Hybrid |
 | Reranker | bge-reranker-v2-m3 |
 | 분류기 | KoBERT/KoELECTRA + linear head |
-| LLM | Anthropic API (Claude Haiku 4.5) |
+| LLM | Google Gemini API (Gemini 3.5 Flash) |
 | 프론트 | Next.js, next-intl (영/한 토글) |
 | 평가 | RAGAS |
 
@@ -84,7 +84,7 @@ backend/
 ├── pipeline/           # 파싱 → 청킹 → 태깅 → 임베딩
 ├── retrieval/          # BM25 / Dense / Hybrid / Reranker
 ├── classifier/         # Intent classifier 학습·추론
-├── llm/                # Claude API 연동
+├── generation/          # Gemini API 답변 생성 연동
 ├── routes/             # Flask API 엔드포인트
 ├── db/                 # MongoDB 연결
 └── evaluation/         # RAGAS 기반 정량 평가
@@ -100,7 +100,7 @@ docs/                   # 아키텍처 설명, 평가 결과 정리
 # 백엔드
 cd backend
 pip install -r requirements.txt --break-system-packages
-cp .env.example .env   # ANTHROPIC_API_KEY, MONGO_URI 입력
+cp .env.example .env   # GOOGLE_API_KEY, MONGO_URI 입력
 python app.py
 
 # 프론트엔드

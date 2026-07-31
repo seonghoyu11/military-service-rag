@@ -9,7 +9,7 @@ kiwipiepy
 transformers
 torch
 
-anthropic
+google-genai
 
 requests
 beautifulsoup4

@@ -111,8 +111,8 @@ def _inject_anchor_chunks(candidates, anchor_lookups):
 def query():
     """
     Prototype endpoint: classifies the question and returns the top-ranked
-    law chunks (hybrid retrieval + reranker). Does not call Claude yet --
-    that's stage 5, blocked on an API key.
+    law chunks (hybrid retrieval + reranker). Does not call Gemini yet --
+    that's stage 5.
     """
     data = request.get_json(silent=True) or {}
     question = (data.get("question") or "").strip()
