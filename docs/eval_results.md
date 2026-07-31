@@ -522,3 +522,85 @@ related_scope_info: 9개 항 (제24조)
 
 28개 스트레스 테스트 시나리오(1~28) 전체가 이제 라이브 서버 기준으로 검증 완료 상태다.
 남은 액션 없음 — 다음 단계는 Anthropic API 키 발급 대기 후 5단계(Claude API 연동) 착수.
+
+## 신규 쿼리 7건 라이브 서버 검증 (2026-07-30)
+
+### 배경
+
+이전 세션들에서 진단된 이슈(허가취소/연기 방향성, 앵커 강제포함, threshold advisory
+flag 등)가 실제 실행 중인 서버에도 반영돼 있는지 HTTP 레벨에서 재검증. standalone
+스크립트가 아니라 살아있는 Flask 서버에 `/api/query`로 직접 POST 요청.
+
+### 클린 재시작 확인
+
+```
+[startup] pid=62665 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+ * Restarting with stat
+[startup] pid=62739 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+```
+
+`pkill -9 -f "app.py"` 실행 시 종료된 프로세스 없음(exit code 1, 기존에 떠 있던 프로세스
+없었음) 확인 후 `python3 app.py`로 재기동. 부모(62665)/자식(62739) 두 pid 모두 동일한
+`hash=2dc6d7a4`, 270 chunks, mtime이 `law_chunks.json` 실제 파일 mtime(1783695411)과
+일치 — 좀비 프로세스나 stale 모듈 로드 없음을 확인.
+
+### `/api/query` 재검증 결과
+
+| # | 질문 | topic_tags | user_type_tags | anchor_lookups | low_confidence | top1 (boosted) | 판정 |
+|---|---|---|---|---|---|---|---|
+| 1 | 유학 중인데 휴학하면 입영연기가 취소되나요 | `['허가취소','연기','입영연기_신청']` | — | 국외여행 업무처리 규정 27조 | False | 27조③ (0.5618) | ✅ PASS |
+| 2 | 외국 대학 자퇴하면 병역은 어떻게 되나요 | `['일반']` | `['전체']` | 국외여행 업무처리 규정 27조 | False | 27조③ (0.3014) | ✅ PASS |
+| 3 | 아르바이트하면 문제되나요 | `['영리활동']` | `['전체']` | `[]` | True | 시행령 147조의2 (0.0008) | ❌ FAIL |
+| 4 | 박사과정 중인데 저도 유학생으로 인정되나요 | `['일반']` | `['유학생']` | `[]` | True | 시행령 147조 (0.0245) | ✅ PASS |
+| 5 | 영주권 유지하려고 한국에 6개월 넘게 못 있는데 문제없나요 | `['일반']` | `['영주권자']` | `[]` | **False** | 국외여행 업무처리 규정 24조 (0.0995) | ⚠️ PARTIAL |
+| 6 | 영주권자인데 언제까지 입영 안 해도 되나요 | `['연기','입영연기_신청']` | `['영주권자']` | `[]` | False | 별표3 (0.3092) | ✅ PASS |
+| 7 | 그냥 한국 안 들어가면 안 되나요 | `['제재']` | `['전체']` | 병역법 70조, 94조 | False | 병역법 94조 (0.3044) | ✅ PASS |
+
+margin 로그(boost 적용 전, raw cross-encoder 점수):
+
+```
+[margin] query='유학 중인데 휴학하면 입영연기가 취소되나요' top1=0.1648 top2=0.1072 margin=0.0576
+[margin] query='외국 대학 자퇴하면 병역은 어떻게 되나요' top1=0.0225 top2=0.0179 margin=0.0046
+[margin] query='아르바이트하면 문제되나요' top1=0.0008 top2=0.0002 margin=0.0006
+[margin] query='박사과정 중인데 저도 유학생으로 인정되나요' top1=0.0245 top2=0.0066 margin=0.0179
+[margin] query='영주권 유지하려고 한국에 6개월 넘게 못 있는데 문제없나요' top1=0.0995 top2=0.0965 margin=0.0030
+[margin] query='영주권자인데 언제까지 입영 안 해도 되나요' top1=0.4486 top2=0.3120 margin=0.1366
+[margin] query='그냥 한국 안 들어가면 안 되나요' top1=0.0082 top2=0.0073 margin=0.0008
+```
+
+### 실패/부분 케이스 원인 분석
+
+**#3 FAIL — 로직 문제 (배포 동기화 아님).** 분류기는 `영리활동` 토픽을
+정확히 태깅하지만(`classifier/model.py` `TOPIC_KEYWORDS["영리활동"]`), 이 태그를
+특정 조문(제22조, 영리활동의 범위)으로 연결하는 앵커/부스트 메커니즘이 없다.
+`SYNONYM_ANCHOR_LOOKUPS`(`classifier/model.py:101-126`)에는 휴학/자퇴(27조),
+안 들어가(70/94조) 항목만 있고 영리활동/아르바이트 항목이 빠져 있다. `_apply_directional_boost`
+(`routes/query.py:53`)는 `DIRECTIONAL_TAGS = {"입영연기_신청","입영연기_취소"}`에만
+반응하고, `_apply_anchor_boost`/`_inject_anchor_chunks`는 `anchor_lookups`가 빈 리스트일
+땐 아무 것도 안 한다. 그 결과 제22조(raw score 0.0002, 후보 3위)가 강제 포함/부스트 없이
+방치되고, 무관한 147조의2(국외여행허가의 취소)가 top1으로 남는다. → 이슈 1(앵커 강제포함)의
+적용 범위가 "휴학/자퇴", "회피 표현" 두 케이스로만 한정돼 있고 아르바이트/영리활동 케이스로
+확장되지 않은 것이 원인. 코드가 실행 중인 그대로 정확히 재현됐으므로 배포 동기화 문제는
+아니고, 순수 기능 갭.
+
+**#5 PARTIAL — 설계상 알려진 한계 (이슈 2 문서화된 내용과 일치).** `low_confidence`는
+`reranked[0][1] < LOW_CONFIDENCE_THRESHOLD(0.05)`(`routes/query.py:168`)라는 절대값
+컷오프다. 이 쿼리의 top1(raw 0.0995)은 threshold를 넘어서 `low_confidence=False`가
+찍히지만, top2(0.0965)와의 margin은 0.0030으로 #3(0.0006)이나 #7(0.0008)과 같은 수준의
+"노이즈성" 간극이다 — 즉 절대 점수만으론 이 케이스가 진짜 답인지 우연히 threshold를
+넘은 애매한 매칭인지 구분이 안 된다. 이는 신규 버그가 아니라 위 "Threshold 개선 검증:
+margin(top1-top2) 기반 저신뢰 판정 (2026-07-15)" 섹션에서 이미 결론 낸 미해결 항목과
+동일한 현상 — advisory flag 자체(hard cutoff 아님)는 #3에서 정상 작동 확인됐고(low_confidence=true
+찍혔지만 결과는 계속 반환됨), 다만 threshold 기준이 margin을 반영하지 않는다는 기존 한계가
+이번에도 재현됨.
+
+### 결론
+
+7개 중 5개(#1,2,4,6,7) PASS. #3은 앵커 메커니즘의 적용 범위 누락으로 인한 순수 로직
+갭(신규 발견, 이슈 1 확장 필요). #5는 이미 문서화된 threshold-vs-margin 한계의 재현이며
+advisory flag 메커니즘 자체는 정상 동작 확인됨. 배포 동기화 문제나 코드 회귀는 발견되지
+않음 — startup fingerprint(270 chunks, hash=2dc6d7a4)가 부모/자식 프로세스 모두 일치했고,
+모든 응답이 현재 코드 로직과 논리적으로 설명 가능했다.
+
+**다음 액션 제안**: `SYNONYM_ANCHOR_LOOKUPS`에 영리활동/아르바이트 → 제22조 항목 추가
+검토.
