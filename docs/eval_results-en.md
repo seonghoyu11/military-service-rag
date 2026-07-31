@@ -936,3 +936,222 @@ actually executing the real code, confirmed no false positive on the high-confid
 and confirmed malicious payloads are safely escaped. One caveat: this was verified via
 Node `vm` + a DOM stub rather than a real headless-browser GUI -- if Chrome/Playwright
 becomes available in this environment, a screenshot-based re-verification is recommended.
+
+## Stage 5: Gemini Flash answer-generation verification (2026-07-31)
+
+### Background
+
+After switching from the Anthropic Claude API to the Google Gemini API (rationale in
+`docs/devlog-en.md`), implemented and verified a new feature: turning retrieved articles +
+the question into a grounded, citation-bearing answer. Judgment (which articles are
+relevant, how confident the retrieval is) is entirely owned by the rule-based pipeline
+built through Stage 4 already -- this feature's only responsibility is synthesizing an
+answer from text that's already been retrieved.
+
+### Steps 1-2: cost-safety guardrails + the `generate_answer()` module
+
+- `backend/generation/gemini_client.py`: a hardcoded 6-model whitelist
+  (`gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`,
+  `gemini-3.1-flash-lite`, `gemini-2.5-flash`, `gemini-2.0-flash`) -- any model name
+  outside the whitelist raises `DisallowedModelError` and blocks the API call entirely.
+  `vertexai=False` is explicit (Google AI Studio path only, never the
+  billing-enabled Vertex AI path). Only 429 (rate-limit/quota) errors get retried, up to
+  2 times with exponential backoff; every other error surfaces immediately. A data-privacy
+  note (free-tier prompts may be used by Google to improve their products) is left as a
+  code comment.
+- `backend/generation/answer.py`: `generate_answer(question, results)` -- a
+  system_instruction that forces grounding ("don't guess or invent anything not in the
+  provided articles," explicitly say "this can't be determined from the provided articles
+  alone" when information is insufficient) plus a forced citation format ("Per Article
+  N Paragraph M of [Act]..."). Returns `None` if `results` is empty (a defensive guard).
+  **The `low_confidence` branch is NOT this function's job -- it belongs to
+  `routes/query.py`.** `generate_answer()` was deliberately designed to never receive the
+  `low_confidence` flag at all, so it's structurally impossible for it to dress up a
+  low-confidence retrieval as a confident-sounding answer.
+
+**Empirical finding -- some whitelisted models don't actually work.** Calling the spec's
+originally-intended default, `gemini-3.5-flash`, kept returning 503 (high demand) across 3
+retries spaced apart in time. Smoke-testing all 6 whitelisted models directly found:
+- `gemini-2.5-flash` -> 404 ("no longer available to new users" -- effectively a dead
+  model)
+- `gemini-2.0-flash` -> 429 with a hard **0** free-tier quota (completely blocked on this
+  account's free tier)
+- `gemini-3.5-flash` -> persistent 503s (hard to call this "temporary" high demand)
+- `gemini-3.6-flash` / `gemini-3.5-flash-lite` / `gemini-3.1-flash-lite` -> all worked
+
+**Changed the default model to `gemini-3.6-flash`** (the whitelist itself stays at all 6
+entries -- the safety boundary isn't compromised by 2 of them being dead on this
+particular account, so there's no reason to remove them from the whitelist). This
+empirical finding is documented with the date in a `gemini_client.py` comment.
+
+### Step 3: `/api/query` integration verification
+
+Wired `routes/query.py` to call `generate_answer()` only when `low_confidence: false` and
+`results` is non-empty, wrapped in `try/except` so a failure returns `answer: null`,
+`answer_error: "..."` instead of a 500 (the request never dies).
+
+**Clean restart check** (`pkill -9 -f "app.py"` -> `python3 app.py`):
+```
+[startup] pid=91261 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+ * Restarting with stat
+[startup] pid=91303 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+```
+
+**Graceful-failure verification -- confirmed both a real occurrence and a simulated one.**
+1. Real occurrence: during testing, a `gemini-3.6-flash` call actually returned a real 503.
+   Server log: `[answer_error] query='사회복무요원인데 해외 갈 수 있나요'
+   error=ServerError("503 UNAVAILABLE...")`. The HTTP response was still 200, `results`
+   came back normally, `answer: null`, and `answer_error` held the error message -- the
+   request didn't die.
+2. Simulated: forced `routes.query.generate_answer` to raise `RuntimeError` via
+   `unittest.mock.patch`, then called the real `/api/query` route through Flask's
+   `test_client()` -- got `HTTP 200`, all 5 `results` returned normally, and
+   `answer_error: "RuntimeError: simulated Gemini API failure..."`. (This monkeypatch is
+   for constructing a reproducible failure case, not the "standalone script replacing
+   server verification" pattern earlier sessions ruled out -- it runs the exact same
+   `routes/query.py` code the live server loaded, and the only thing being faked is the
+   single external API call site, not any application logic.)
+
+### Bug found and fixed: citation formatting for Table 3 (별표) articles
+
+**Symptom**: answers that cited a Table 3 (overseas-emigration permit eligibility table)
+chunk read awkwardly, e.g. "병역법 시행령 별표 3 **제별표3조** 제1항에 따르면..." ("Per
+**Article 별표3** of Table 3 of the Enforcement Decree..."). Not a hallucination -- no
+fact was invented -- but a formatting defect from mechanically forcing the citation-format
+requirement ("Per Article N Paragraph M") onto something that isn't a numbered article.
+
+**Root cause**: `_format_articles()` unconditionally applied the "제{article_no}조"
+("Article {article_no}") template to every result, but a Table 3 chunk's `article_no`
+field is the literal string `"별표3"` (not a number), producing the malformed "제별표3조."
+
+**Fix**: when `article_no` starts with `"별표"`, skip the "Article N" template and format
+as `{law_name} ({article_title}) 항목 {paragraph_no}` (`answer.py`). Also added an
+instruction to the system prompt: "when the source is a Table (별표), cite it as '~
+Enforcement Decree Table 3에 따르면' ('Per Table 3 of the ~ Enforcement Decree'), not as
+'Article N'."
+
+**Re-verification**: after a clean restart, all 3 queries that touch a Table 3 chunk
+(#2/#3/#4 in the Stage 4 table below) now cite it correctly as "병역법 시행령 별표 3에
+따르면..." ("Per Table 3 of the Enforcement Decree...").
+
+### Step 4: Faithfulness spot check (5 queries, real HTTP requests against the
+clean-restarted server)
+
+| # | Question | low_confidence | Answer generated? | Citation accuracy |
+|---|---|---|---|---|
+| 1 | Leave of absence while studying abroad -- does my postponement get cancelled? | False | Yes | ✅ Cited articles (Art. 27③, Art. 125②) all present in `results`. Didn't guess about "leave of absence" specifically since the articles don't mention it |
+| 2 | I'm a permanent resident -- until when can I avoid enlisting? | False | Yes | ✅ Cited articles (Table 3, Art. 149①-1, Art. 128①-1) all present in `results`. Declined to give a definitive answer, citing missing user-specific details |
+| 3 | I'm a public-service worker -- can I travel abroad? | False (top1 0.9882) | Yes | ✅ Cited articles (Art. 135⑧, Table 3 x4) all present in `results`. No fabricated articles |
+| 4 | My dad is a company-posted expat -- do I also get a postponement? | False | Yes | ✅ Cited articles (Table 3, Art. 149①-5, Art. 128①-2/②, Art. 60①-2) all present in `results`. Correctly applied **the expat-parent exception** in Table 3 (the "5+ years abroad" clause explicitly excludes cases where a parent is a company-posted expat) rather than misapplying the general rule |
+| 5 | I have dual citizenship -- would working in Korea count against me? | **True** | **Skipped** (`answer: null`, `answer_error: null`) | ✅ `generate_answer()` was never invoked, as designed -- only `low_confidence_notice` came back |
+
+Full answer text (final, post-Table-3-format-fix):
+
+**#1**
+> Per Article 27 Paragraph 3 of the Regulations on Overseas Travel of Military
+> Conscripts, a district Military Manpower Administration office must revoke the permit
+> and notify the person if a review of enrollment status finds that someone who received
+> an overseas-travel permit for study-abroad purposes no longer meets the permit
+> conditions -- however, whether a leave of absence specifically triggers cancellation of
+> an enlistment postponement isn't specified, so this can't be determined from the
+> provided articles alone.
+>
+> Per Article 125 Paragraph 2 of the Enforcement Decree, a person enrolled at a foreign
+> university or graduate school who wants a postponement of enlistment etc. must submit a
+> postponement application to the district Military Manpower Administration office --
+> however, no provision addressing cancellation due to a leave of absence is presented.
+
+**#2**
+> Per Table 3 of the Enforcement Decree, a person subject to reserve-forces/social-service/
+> alternative-service call-up who has obtained permanent residency and has continuously
+> resided in that country for 3+ years may receive an overseas-travel permit or extension
+> valid up to age 37.
+>
+> Per Article 149 Paragraph 1 Item 1 of the Enforcement Decree, a service obligor who has
+> resided abroad since before age 18 is deemed to have received an overseas-travel permit
+> valid up to age 37 if they or a parent obtained permanent residency abroad (excluding
+> conditional permanent residency) before age 25 and has continued residing abroad.
+>
+> Per Article 128 Paragraph 1 Item 1 of the Enforcement Decree, a person who received an
+> overseas-travel permit or extension and is residing abroad is deemed to have their
+> pre-enlistment physical/re-physical or enlistment postponed.
+>
+> Whether the questioner meets the specific conditions under Article 149 Paragraph 1 and
+> Table 3 of the Enforcement Decree (timing of obtaining permanent residency, length of
+> residence, etc.) can't be determined from the provided articles alone.
+
+**#3**
+> Per Article 135 Paragraph 8 of the Enforcement Decree, if a person serving as a
+> public-service worker emigrates abroad with their family, the district Military Manpower
+> Administration office releases them from their public-service call-up.
+>
+> Per Table 3 of the Enforcement Decree, a public-service call-up subject who has filed an
+> overseas-emigration report may receive an overseas-travel permit or extension only once,
+> within a 3-year scope.
+>
+> Per Table 3 of the Enforcement Decree, a public-service call-up subject who filed an
+> overseas-emigration report and has continuously resided in the destination country
+> (including the pre-departure waiting period) for 3+ years may receive an overseas-travel
+> permit or extension valid up to age 37.
+>
+> Per Table 3 of the Enforcement Decree, a public-service call-up subject who has
+> continuously resided abroad with a parent for 5+ years may receive an overseas-travel
+> permit or extension valid up to age 37.
+>
+> Per Table 3 of the Enforcement Decree, a public-service call-up subject who has obtained
+> conditional or temporary permanent residency in a foreign country and resides there may
+> receive an overseas-travel permit or extension valid up to 6 months past the conditional/
+> temporary permanent-residency's validity period.
+
+**#4**
+> Per Table 3 of the Enforcement Decree, if a parent is a company-posted expat, the
+> family is excluded from the overseas-travel permit/extension eligibility even if they've
+> continuously resided abroad with that parent for 5+ years.
+>
+> Per Article 149 Paragraph 1 Item 5 of the Enforcement Decree, a person is deemed to have
+> received an overseas-travel permit valid up to age 37 only if they left Korea before age
+> 18 with a parent who is *not* a company-posted expat and has continued residing abroad
+> with that parent.
+>
+> Per Article 128 Paragraph 1 Item 2 of the Enforcement Decree, a person under 25 who
+> hasn't been called up as a reserve-forces member, alternative-service member, or
+> substitute-service member and is residing or staying abroad is deemed to have their
+> pre-enlistment physical/re-physical or enlistment postponed.
+>
+> Per Article 128 Paragraph 2 of the Enforcement Decree, a person born abroad, or who has
+> filed an overseas-emigration report under the Overseas Emigration Act and resides
+> abroad, may have their pre-enlistment physical/re-physical or enlistment postponed based
+> on confirmation from the head of the relevant diplomatic mission.
+>
+> Per Article 60 Paragraph 1 Item 2 of the Military Service Act, a district Military
+> Manpower Administration office may postpone the pre-enlistment physical/re-physical for
+> a person residing or staying abroad.
+>
+> Per Table 3 of the Enforcement Decree, Article 128 Paragraphs 1 and 2, Article 149
+> Paragraph 1 of the Enforcement Decree, and Article 60 Paragraph 1 of the Military Service
+> Act, whether the questioner's postponement applies can't be conclusively determined from
+> the provided articles alone, given missing specifics (age, whether born abroad, whether
+> an overseas-emigration report was filed, etc.).
+
+**#5**: since `low_confidence: true`, `generate_answer()` was never called. Only
+`answer: null` and `low_confidence_notice` came back, as designed.
+
+### Conclusion
+
+All 5 spot-check queries had citations that exactly matched articles actually present in
+`results`, and no answer added a fact outside the provided text -- in particular, #1 (leave
+of absence) and #2/#4 (user-specific eligibility details) were each honestly answered with
+"can't be determined from the provided articles alone" wherever the articles didn't
+explicitly cover the specific scenario asked about. #4 correctly applied Table 3's
+expat-parent exception, handling that edge case correctly rather than defaulting to the
+general rule. #5 confirmed the `low_confidence` gate does its job -- it blocks answer
+generation entirely, by design.
+
+Two things were found and fixed along the way: (1) the spec's default model,
+`gemini-3.5-flash`, doesn't actually work on this account, so the default was switched to
+`gemini-3.6-flash`; 2 of the whitelisted models (`gemini-2.5-flash`, `gemini-2.0-flash`)
+turned out to be effectively dead on this account too -- the whitelist (the safety
+boundary) was kept intact, only the actual default was swapped for one that works. (2) A
+citation-formatting bug for Table 3 chunks was found, fixed, and re-verified.
+
+Stage 5 (answer generation) is now implemented, integrated, and faithfulness-verified.

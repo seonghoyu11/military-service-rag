@@ -62,9 +62,12 @@
   키워드를 보강해서 대응. 암묵적 문맥(예: 이전 질문에서 언급된 영주권자라는 정보가 후속 질문에는
   없는 경우)은 규칙 기반 분류기의 한계로 남겨둠 — 계획대로 데이터가 쌓이면 경량 분류기로 교체 예정
 
-### 5단계: 답변 생성 (Google Gemini API) — 진행 중
+### 5단계: 답변 생성 (Google Gemini API) — 완료
 Anthropic Claude API에서 Google Gemini API로 전환 결정 (전환 사유는 `docs/devlog.md` 참고).
-`generation/answer.py`에서 근거조항 텍스트만을 근거로 citation 포함 답변 생성.
+`generation/gemini_client.py`(모델 화이트리스트, Vertex AI 미사용, rate limit 재시도
+제한 등 비용 안전장치) + `generation/answer.py`(근거조항 텍스트만을 근거로 citation
+포함 답변 생성, `low_confidence`/빈 결과 시 생성 스킵)로 구현하고 `routes/query.py`에
+통합, faithfulness 스팟체크까지 완료 (상세 결과는 `docs/eval_results.md` 참고).
 
 ### 6~7단계 이후: 미착수
 Flask API 마무리, Next.js 프론트(7단계, next-intl 한/영 토글 포함) — 계획대로 순서대로 진행 예정.

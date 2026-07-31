@@ -309,12 +309,12 @@ section of `docs/eval_results-en.md`.
 
 ## What's left
 
-- **Stage 5 (in progress)**: Google Gemini API integration — retrieved
-  articles + question → natural-language answer generation (eligibility
-  judgment stays rule-based; the LLM's job is synthesis only).
+- **Stage 5 (done)**: Google Gemini API integration — retrieved articles +
+  question → natural-language answer generation (eligibility judgment stays
+  rule-based; the LLM's job is synthesis only). Faithfulness-spot-checked
+  (see the "Stage 5" section in `docs/eval_results-en.md`).
 - **Stage 6**: formalize the Flask API (`/api/profile`, `/api/feedback`) +
-  RAGAS evaluation (needs Stage 5 done first, to measure answer
-  faithfulness).
+  RAGAS evaluation.
 - **Stage 7**: the Next.js frontend — a Korean/English toggle via
   next-intl is required, since the target users are overseas Koreans.
 

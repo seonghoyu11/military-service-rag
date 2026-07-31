@@ -92,10 +92,14 @@ eligibility table).
   addressed by swapping in a lightweight trained classifier once enough
   labeled query data accumulates, per the original plan.
 
-### Stage 5: Answer generation (Google Gemini API) — In progress
+### Stage 5: Answer generation (Google Gemini API) — Done
 Switched from the Anthropic Claude API to the Google Gemini API (rationale in
-`docs/devlog-en.md`). `generation/answer.py` generates citation-bearing answers
-grounded strictly in the retrieved article text.
+`docs/devlog-en.md`). Implemented as `generation/gemini_client.py` (cost-safety
+guardrails: model whitelist, no Vertex AI, capped rate-limit retries) +
+`generation/answer.py` (citation-bearing answers grounded strictly in the
+retrieved article text, generation skipped on `low_confidence`/empty results),
+wired into `routes/query.py`, and faithfulness-spot-checked (full results in
+`docs/eval_results-en.md`).
 
 ### Stage 6 onward: Not started
 Finishing the Flask API, Next.js frontend (stage 7, including the next-intl

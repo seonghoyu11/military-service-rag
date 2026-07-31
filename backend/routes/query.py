@@ -5,6 +5,7 @@ import sys
 from flask import Blueprint, request, jsonify
 
 from classifier.predict import classify
+from generation.answer import generate_answer
 from retrieval import bm25_search, hybrid, reranker
 
 query_bp = Blueprint("query", __name__)
@@ -110,9 +111,9 @@ def _inject_anchor_chunks(candidates, anchor_lookups):
 @query_bp.route("/api/query", methods=["POST"])
 def query():
     """
-    Prototype endpoint: classifies the question and returns the top-ranked
-    law chunks (hybrid retrieval + reranker). Does not call Gemini yet --
-    that's stage 5.
+    Classifies the question, returns the top-ranked law chunks (hybrid
+    retrieval + reranker), and -- when confident enough -- a Gemini-generated
+    answer grounded in those chunks.
     """
     data = request.get_json(silent=True) or {}
     question = (data.get("question") or "").strip()
@@ -179,6 +180,20 @@ def query():
         for chunk, score in reranked
     ]
 
+    # Generation only runs on confident, non-empty retrieval -- a low-confidence
+    # or empty result set never reaches Gemini, so the LLM can't dress up a
+    # weak retrieval as a confident-sounding answer (see generation/answer.py).
+    # Any failure here (API error, quota exhaustion, etc.) is swallowed so the
+    # request still returns the retrieved articles instead of a 500.
+    answer = None
+    answer_error = None
+    if not low_confidence and results:
+        try:
+            answer = generate_answer(question, results)
+        except Exception as e:
+            print(f"[answer_error] query={question!r} error={e!r}", file=sys.stderr)
+            answer_error = f"{type(e).__name__}: {e}"
+
     return jsonify({
         "out_of_scope": False,
         "intent": intent,
@@ -186,4 +201,6 @@ def query():
         "related_scope_info": None,
         "low_confidence": low_confidence,
         "low_confidence_notice": LOW_CONFIDENCE_NOTICE if low_confidence else None,
+        "answer": answer,
+        "answer_error": answer_error,
     })

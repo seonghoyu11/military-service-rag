@@ -233,10 +233,10 @@ citation 형식 준수, grounding 충실도)만 재검증하면 되는 구조라
 
 ## 남은 과정
 
-- **5단계 (진행 중)**: Google Gemini API 연동 — 검색된 근거조항 + 질문 → 자연어
-  답변 생성 (판단은 rule-based, LLM은 종합·생성 역할만).
-- **6단계**: Flask API 정식화(`/api/profile`, `/api/feedback`) + RAGAS 평가
-  (5단계 완료 후 answer faithfulness 측정 가능).
+- **5단계 (완료)**: Google Gemini API 연동 — 검색된 근거조항 + 질문 → 자연어
+  답변 생성 (판단은 rule-based, LLM은 종합·생성 역할만). faithfulness 스팟체크까지
+  마침 (`docs/eval_results.md` "Stage 5" 섹션).
+- **6단계**: Flask API 정식화(`/api/profile`, `/api/feedback`) + RAGAS 평가.
 - **7단계**: Next.js 프론트 — next-intl 한/영 토글 필수 (재외국민 타겟이라서).
 
 관련 문서: [architecture.md](architecture.md) (전체 구조), [eval_results.md](eval_results.md)
