@@ -16,6 +16,25 @@ them," repeated.
 
 ---
 
+## Table of Contents
+
+- [Stage 1: Law-parsing pipeline](#stage-1-law-parsing-pipeline)
+- [Stage 2: Embedding model comparison + MongoDB ingestion](#stage-2-embedding-model-comparison--mongodb-ingestion)
+- [Stage 3: Hybrid retrieval + reranker](#stage-3-hybrid-retrieval--reranker)
+- [Stage 4: Intent classifier](#stage-4-intent-classifier)
+- [Building a prototype, actually using it, and finding what was broken](#building-a-prototype-actually-using-it-and-finding-what-was-broken)
+  - [Finding 1: search results came back with the opposite meaning](#finding-1-search-results-came-back-with-the-opposite-meaning)
+  - [Finding 2: fixing the tags didn't change the search results](#finding-2-fixing-the-tags-didnt-change-the-search-results)
+  - [Finding 3: article boundaries were silently broken](#finding-3-article-boundaries-were-silently-broken)
+  - [Finding 4: the right answer exists in the corpus, but retrieval can't find it](#finding-4-the-right-answer-exists-in-the-corpus-but-retrieval-cant-find-it)
+  - [Finding 5: real answers and noise scores can invert](#finding-5-real-answers-and-noise-scores-can-invert)
+  - [Finding 6: a scope-detection blind spot](#finding-6-a-scope-detection-blind-spot)
+  - [Finding 7: the code was right, but the server's response wasn't](#finding-7-the-code-was-right-but-the-servers-response-wasnt)
+- [What this taught](#what-this-taught)
+- [Waiting on Stage 5: a threshold experiment and one more evasive-phrasing gap (2026-07-15)](#waiting-on-stage-5-a-threshold-experiment-and-one-more-evasive-phrasing-gap-2026-07-15)
+- [Stage 5 LLM switch: Anthropic Claude → Google Gemini (2026-07-31)](#stage-5-llm-switch-anthropic-claude--google-gemini-2026-07-31)
+- [What's left](#whats-left)
+
 ## Stage 1: Law-parsing pipeline
 
 Parsed 6 law PDFs (the Military Service Act, its Enforcement Decree,

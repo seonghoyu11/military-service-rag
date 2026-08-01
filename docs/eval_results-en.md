@@ -1,5 +1,23 @@
 # Evaluation Results
 
+## Table of Contents
+
+- [Stage 2: Embedding model comparison (2026-07-09)](#stage-2-embedding-model-comparison-2026-07-09)
+- [Stage 3: Hybrid retrieval + reranker (2026-07-10)](#stage-3-hybrid-retrieval--reranker-2026-07-10)
+- [Stage 4: Intent classifier validation (2026-07-10)](#stage-4-intent-classifier-validation-2026-07-10)
+- [Prototype validation: diagnosing and fixing "enlistment postponement" tagging/ranking (2026-07-10)](#prototype-validation-diagnosing-and-fixing-enlistment-postponement-taggingranking-2026-07-10)
+- [Retrieval quality fixes, round 2: diagnosing and fixing 6 issues (2026-07-10)](#retrieval-quality-fixes-round-2-diagnosing-and-fixing-6-issues-2026-07-10)
+- [Threshold improvement check: margin (top1-top2) based low-confidence flagging (2026-07-15)](#threshold-improvement-check-margin-top1-top2-based-low-confidence-flagging-2026-07-15)
+- [Queries 25-28 re-verification + one more evasive-phrasing gap fixed (2026-07-15)](#queries-25-28-re-verification--one-more-evasive-phrasing-gap-fixed-2026-07-15)
+- [Deployment sync issue: "the code is right but the server response doesn't match it" (2026-07-10)](#deployment-sync-issue-the-code-is-right-but-the-server-response-doesnt-match-it-2026-07-10)
+- [Final live-server re-verification of queries 25, 27, 28 (2026-07-21)](#final-live-server-re-verification-of-queries-25-27-28-2026-07-21)
+- [7 new queries: live-server verification (2026-07-30)](#7-new-queries-live-server-verification-2026-07-30)
+- [Issue A fix: "part-time job" question returned an unrelated article (2026-07-31)](#issue-a-fix-part-time-job-question-returned-an-unrelated-article-2026-07-31)
+- [Issue B fix: the `low_confidence` flag wasn't shown in the frontend at all (2026-07-31)](#issue-b-fix-the-low_confidence-flag-wasnt-shown-in-the-frontend-at-all-2026-07-31)
+- [Stage 5: Gemini Flash answer-generation verification (2026-07-31)](#stage-5-gemini-flash-answer-generation-verification-2026-07-31)
+- [Stage 6: formalizing the Flask API -- session profile + feedback (2026-08-01)](#stage-6-formalizing-the-flask-api----session-profile--feedback-2026-08-01)
+- [Stage 6's last piece: RAGAS quantitative evaluation (2026-08-01)](#stage-6s-last-piece-ragas-quantitative-evaluation-2026-08-01)
+
 ## Stage 2: Embedding model comparison (2026-07-09)
 
 ### Method

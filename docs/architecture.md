@@ -1,5 +1,19 @@
 # 아키텍처 및 진행 상황
 
+## 목차
+
+- [전체 구조](#전체-구조)
+- [스코프](#스코프)
+- [데이터 원본 (6개, 축약본)](#데이터-원본-6개-축약본)
+- [진행 상황](#진행-상황)
+  - [1단계: 데이터 파싱 파이프라인 — 완료](#1단계-데이터-파싱-파이프라인--완료)
+  - [2단계: 임베딩 모델 비교 + MongoDB 적재 — 완료](#2단계-임베딩-모델-비교--mongodb-적재--완료)
+  - [3단계: Hybrid Retrieval (BM25 + Dense + Reranker) — 완료](#3단계-hybrid-retrieval-bm25--dense--reranker--완료)
+  - [4단계: Intent Classifier (경량, rule-based) — 완료](#4단계-intent-classifier-경량-rule-based--완료)
+  - [5단계: 답변 생성 (Google Gemini API) — 완료](#5단계-답변-생성-google-gemini-api--완료)
+  - [6~7단계 이후: 미착수](#67단계-이후-미착수)
+- [스코프 결정 사항](#스코프-결정-사항)
+
 ## 전체 구조
 ```
 [Next.js 프론트] <-> [Flask 백엔드] <-> [MongoDB Atlas]

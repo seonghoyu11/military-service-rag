@@ -1,5 +1,19 @@
 # Architecture & Progress
 
+## Table of Contents
+
+- [Overall structure](#overall-structure)
+- [Scope](#scope)
+- [Source documents (6, excerpted)](#source-documents-6-excerpted)
+- [Progress](#progress)
+  - [Stage 1: Data parsing pipeline — Done](#stage-1-data-parsing-pipeline--done)
+  - [Stage 2: Embedding model comparison + MongoDB ingestion — Done](#stage-2-embedding-model-comparison--mongodb-ingestion--done)
+  - [Stage 3: Hybrid retrieval (BM25 + Dense + Reranker) — Done](#stage-3-hybrid-retrieval-bm25--dense--reranker--done)
+  - [Stage 4: Intent classifier (lightweight, rule-based) — Done](#stage-4-intent-classifier-lightweight-rule-based--done)
+  - [Stage 5: Answer generation (Google Gemini API) — Done](#stage-5-answer-generation-google-gemini-api--done)
+  - [Stage 6 onward: Not started](#stage-6-onward-not-started)
+- [Scope decisions](#scope-decisions)
+
 ## Overall structure
 ```
 [Next.js frontend] <-> [Flask backend] <-> [MongoDB Atlas]

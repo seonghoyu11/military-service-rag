@@ -12,6 +12,17 @@ An LLM (RAG)-based chatbot designed to provide administrative guidance on milita
 
 ---
 
+## Table of Contents
+
+- [Project Overview](#project-overview)
+- [Architecture](#architecture)
+  - [Tech Stack](#tech-stack)
+- [Data Sources](#data-sources)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+- [Evaluation Results](#evaluation-results)
+- [Development Logs](#development-logs)
+- [License](#license)
 
 ## Project Overview
 The South Korean Military Service Act features highly complex cross-references between clauses, and exception clauses vary significantly based on the user's status (e.g., permanent resident, international student, dual citizen, or second-generation overseas Korean). Rather than relying on simple LLM prompting, this project implements a highly structured pipeline to maximize retrieval accuracy:
