@@ -33,6 +33,8 @@ them," repeated.
 - [What this taught](#what-this-taught)
 - [Waiting on Stage 5: a threshold experiment and one more evasive-phrasing gap (2026-07-15)](#waiting-on-stage-5-a-threshold-experiment-and-one-more-evasive-phrasing-gap-2026-07-15)
 - [Stage 5 LLM switch: Anthropic Claude → Google Gemini (2026-07-31)](#stage-5-llm-switch-anthropic-claude--google-gemini-2026-07-31)
+- [Stage 6: formalizing the Flask API + RAGAS quantitative evaluation (2026-08-01)](#stage-6-formalizing-the-flask-api--ragas-quantitative-evaluation-2026-08-01)
+- [Progress summary](#progress-summary)
 - [What's left](#whats-left)
 
 ## Stage 1: Law-parsing pipeline
@@ -320,29 +322,66 @@ format compliance, grounding faithfulness) needed re-verification, which kept th
 migration cost small.
 
 The free tier comes with a new constraint — no billing may ever occur — so the code adds
-guardrails: a hardcoded model whitelist (only `gemini-2.5-flash`/`gemini-2.5-flash-lite`,
-Pro-tier models blocked), no Vertex AI code path (Google AI Studio only), and a capped
-retry count instead of unbounded retries on rate-limit errors. Full implementation and
-verification details are in the "Stage 5: Gemini Flash answer-generation verification"
-section of `docs/eval_results-en.md`.
+guardrails: a hardcoded model whitelist (only `gemini-3.6-flash`/`gemini-3.5-flash`/
+`gemini-3.5-flash-lite`/`gemini-3.1-flash-lite`/`gemini-2.5-flash`/`gemini-2.0-flash`,
+six models total, Pro-tier models blocked), no Vertex AI code path (Google AI Studio
+only), and a capped retry count instead of unbounded retries on rate-limit errors. The
+default model was set to `gemini-3.6-flash` based on actually calling all six whitelisted
+models (2 turned out to be effectively dead on this account -- 404/zero quota). Full
+implementation and verification details are in the "Stage 5: Gemini Flash
+answer-generation verification" section of `docs/eval_results-en.md`.
+
+## Stage 6: formalizing the Flask API + RAGAS quantitative evaluation (2026-08-01)
+
+Added a login-free, lightweight session profile (`/api/profile`) and feedback
+collection (`/api/feedback`). The session profile is a pure UX convenience --
+so a user doesn't have to re-type "I'm a permanent resident..." every time --
+so it was designed to only affect `intent["user_type_tags"]`, never the
+retrieval ranking logic itself: `classify()` got a new `session_user_type`
+parameter, but any user type explicitly detected in the question text always
+wins over the session profile (a question can be about a third party).
+
+Then wired up RAGAS quantitative evaluation. Extracted the `/api/query` view's
+logic into a pure `answer_question()` function so RAGAS could call it directly
+without HTTP, exercising the literal production code path -- same principle as
+the `answer_error` monkeypatch test from an earlier session. RAGAS's LLM judge
+doesn't use `langchain_google_genai` directly either; it's wrapped in a custom
+`BaseChatModel` that routes through `gemini_client.generate()`, so judge calls
+get this project's "absolutely no billing" whitelist/backoff too.
+
+**Two more things only found by actually running it:**
+- `ragas==0.4.3` unconditionally imports a Vertex AI integration this project
+  doesn't use (`langchain_community.chat_models.vertexai`), and that submodule
+  had already been removed from the latest `langchain-community` (0.4.2,
+  mid-"sunset"), so `import ragas` broke outright. Fixed by pinning
+  `langchain-community==0.3.31`.
+- This account's real daily quota for `gemini-3.6-flash` turned out to be
+  **20 requests** -- far below the "1000-1500" assumed when Stage 5 was
+  designed. Today's profile-integration tests and anchor regression checks
+  alone had already used a good chunk of it before RAGAS even started;
+  adding the pipeline's 6 generation calls plus roughly 12-20 judge calls
+  exhausted it almost immediately -- the first run got only 1 of 12
+  evaluations through before everything else failed on quota-related errors.
+  Separated the judge onto a different whitelisted model
+  (`gemini-3.5-flash-lite`) from the generation model, and serialized RAGAS's
+  concurrency (`max_workers=1`), then it actually ran to completion -- except
+  `gemini-3.6-flash` itself was already at zero quota for the day by then, so
+  today's actual generation numbers came from temporarily binding the
+  generation model to `gemini-3.5-flash-lite` via `unittest.mock.patch`,
+  with no code changes.
+
+The resulting numbers (faithfulness 0.2778, answer_relevancy 0.2670,
+context_recall 0.7917, context_precision NaN from timeouts) aren't settled
+quality metrics yet, given all that -- see the two "Stage 6" sections in
+`docs/eval_results-en.md` for the full caveats and how to re-run cleanly.
+
+## Progress summary
+
+Stages 1-6 are all done. See each stage's section above and
+`docs/eval_results-en.md` for details.
 
 ## What's left
 
-- **Stage 5 (done)**: Google Gemini API integration — retrieved articles +
-  question → natural-language answer generation (eligibility judgment stays
-  rule-based; the LLM's job is synthesis only). Faithfulness-spot-checked
-  (see the "Stage 5" section in `docs/eval_results-en.md`).
-- **Stage 6 (done)**: formalizing the Flask API — `/api/profile` (a
-  login-free, lightweight session profile), `/api/feedback` (👍/👎
-  collection), and RAGAS quantitative evaluation (extracted a pure
-  `answer_question()` core function; RAGAS's judge routes through the same
-  `gemini_client` whitelist as everything else) are all implemented and have
-  been run end-to-end (see the "Stage 6" sections in
-  `docs/eval_results-en.md`). The RAGAS numbers themselves aren't settled
-  yet, though -- (1) `gemini-3.6-flash`'s daily quota turned out to be a low
-  20, so today's run used a substituted generation model, and (2) the 4
-  ground_truth answers are reused from yesterday's spot check, which is
-  circular -- a clean re-run is needed once quota resets.
 - **Stage 7**: the Next.js frontend — a Korean/English toggle via
   next-intl is required, since the target users are overseas Koreans.
 

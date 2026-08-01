@@ -28,6 +28,8 @@
 - [지금까지 배운 것](#지금까지-배운-것)
 - [5단계 대기 중: threshold 실험과 회피 표현 갭 하나 더 (2026-07-15)](#5단계-대기-중-threshold-실험과-회피-표현-갭-하나-더-2026-07-15)
 - [5단계 LLM 전환: Anthropic Claude → Google Gemini (2026-07-31)](#5단계-llm-전환-anthropic-claude--google-gemini-2026-07-31)
+- [6단계: Flask API 정식화 + RAGAS 정량 평가 (2026-08-01)](#6단계-flask-api-정식화--ragas-정량-평가-2026-08-01)
+- [진행 상황 요약](#진행-상황-요약)
 - [남은 과정](#남은-과정)
 
 ## 1단계: 법령 파싱 파이프라인
@@ -245,24 +247,60 @@ Claude API는 사용하려면 결제수단 등록(선결제 크레딧)이 필요
 citation 형식 준수, grounding 충실도)만 재검증하면 되는 구조라 전환 비용이 작다.
 
 무료 티어 특성상 과금이 발생하면 안 된다는 제약이 새로 생겨서, 모델명 화이트리스트
-하드코딩(`gemini-2.5-flash`/`gemini-2.5-flash-lite`만 허용, Pro 계열 차단), Vertex AI
-경로 미사용(Google AI Studio 경로만), rate limit 초과 시 무한 재시도 대신 최대 재시도
-횟수 제한 같은 안전장치를 코드에 넣었다. 상세 구현·검증 결과는
-`docs/eval_results.md`의 "Stage 5: Gemini Flash 답변 생성 검증" 섹션 참고.
+하드코딩(`gemini-3.6-flash`/`gemini-3.5-flash`/`gemini-3.5-flash-lite`/
+`gemini-3.1-flash-lite`/`gemini-2.5-flash`/`gemini-2.0-flash` 6개만 허용, Pro 계열
+차단), Vertex AI 경로 미사용(Google AI Studio 경로만), rate limit 초과 시 무한 재시도
+대신 최대 재시도 횟수 제한 같은 안전장치를 코드에 넣었다. 기본 모델은 화이트리스트
+6개를 실제로 호출해본 결과(2개는 이 계정에서 404/quota 0으로 사실상 사용 불가)를
+반영해 `gemini-3.6-flash`로 정했다. 상세 구현·검증 결과는 `docs/eval_results.md`의
+"Stage 5: Gemini Flash 답변 생성 검증" 섹션 참고.
+
+## 6단계: Flask API 정식화 + RAGAS 정량 평가 (2026-08-01)
+
+로그인 없는 경량 세션 프로필(`/api/profile`)과 피드백 수집(`/api/feedback`)을
+붙였다. 세션 프로필은 매번 "저는 영주권자인데..."를 다시 안 쳐도 되게 하는
+순수 UX 편의 기능이라, `intent["user_type_tags"]`에만 영향을 주고 검색 랭킹
+로직 자체는 안 건드리도록 설계했다 — `classify()`에 `session_user_type`
+파라미터를 추가하되, 질문 텍스트에서 유저타입이 명시적으로 감지되면 그게 항상
+세션 프로필보다 우선하게 했다(질문이 제3자 얘기를 할 수도 있으니까).
+
+이어서 RAGAS 정량 평가를 붙였다. `/api/query` 뷰 로직을 `answer_question()`
+순수 함수로 분리해서, RAGAS가 HTTP 없이 이 함수를 직접 호출해 실제 프로덕션
+코드 경로 그대로 평가하게 했다 — 이전 세션의 `answer_error` monkeypatch
+검증과 같은 철학이다. RAGAS의 LLM judge도 `langchain_google_genai`를 직접
+꽂지 않고 `gemini_client.generate()`를 경유하는 커스텀 `BaseChatModel`로
+감싸서, judge 호출도 이 프로젝트의 "절대 과금 안 됨" 화이트리스트/backoff를
+그대로 통과하게 했다.
+
+**여기서도 실행해보고서야 알게 된 것 두 가지:**
+- `ragas==0.4.3`이 이 프로젝트가 안 쓰는 Vertex AI 통합
+  (`langchain_community.chat_models.vertexai`)을 무조건 import하는데, 그
+  서브모듈이 최신 `langchain-community`(0.4.2, "sunset" 진행 중)에는 이미
+  제거돼 있어서 `import ragas` 자체가 깨졌다. `langchain-community==0.3.31`로
+  고정해서 해결.
+- `gemini-3.6-flash`의 이 계정 실측 일일 quota가 **20회**였다 — Stage 5
+  설계 당시 가정했던 "1000~1500회"보다 훨씬 낮다. 오늘 세션의 프로필 통합
+  테스트 + anchor 회귀 확인만으로 이미 상당수를 써버린 상태에서 RAGAS의
+  생성 6회 + judge 호출(12~20회 안팎)을 더하니 순식간에 소진돼서, 첫 실행은
+  1/12 평가 성공 후 나머지가 전부 quota 관련 에러로 실패했다. judge 모델을
+  생성 모델과 다른 화이트리스트 모델(`gemini-3.5-flash-lite`)로 분리하고
+  RAGAS 동시성을 직렬화(`max_workers=1`)한 뒤 재시도해서 실제로 끝까지
+  돌리는 데 성공했다 — 다만 그날 하루는 `gemini-3.6-flash` 자체도 이미
+  quota가 바닥나 있어서, 오늘 실행분의 실제 답변 생성은 코드 변경 없이
+  `unittest.mock.patch`로 생성 모델만 임시로 `gemini-3.5-flash-lite`에
+  묶어서 얻은 수치다.
+
+나온 수치(faithfulness 0.2778, answer_relevancy 0.2670, context_recall
+0.7917, context_precision은 타임아웃으로 NaN)는 그래서 "확정 품질 지표"로
+보기엔 이르다 — 상세 한계와 재실행 방법은 `docs/eval_results.md`의 "Stage 6"
+두 섹션 참고.
+
+## 진행 상황 요약
+
+1~6단계 전부 완료. 단계별 상세 내용은 위 각 섹션 및 `docs/eval_results.md` 참고.
 
 ## 남은 과정
 
-- **5단계 (완료)**: Google Gemini API 연동 — 검색된 근거조항 + 질문 → 자연어
-  답변 생성 (판단은 rule-based, LLM은 종합·생성 역할만). faithfulness 스팟체크까지
-  마침 (`docs/eval_results.md` "Stage 5" 섹션).
-- **6단계 (완료)**: Flask API 정식화 — `/api/profile`(로그인 없는 경량 세션
-  프로필), `/api/feedback`(👍/👎 수집), RAGAS 정량 평가(`answer_question()`
-  코어 함수 분리 + RAGAS judge를 gemini_client 화이트리스트 경유로 구현)까지
-  전부 구현·실행 완료(`docs/eval_results.md` "Stage 6" 섹션들). 다만 RAGAS
-  수치 자체는 (1) `gemini-3.6-flash` 일일 quota가 20회로 낮아서 오늘 실행분은
-  생성 모델을 임시로 대체해 돌렸고 (2) ground_truth 4개가 어제 스팟체크 답변
-  재사용이라 순환적이라, "확정된 품질 지표"로 보기엔 이르다 — quota 초기화
-  후 재실행 필요.
 - **7단계**: Next.js 프론트 — next-intl 한/영 토글 필수 (재외국민 타겟이라서).
 
 관련 문서: [architecture.md](architecture.md) (전체 구조), [eval_results.md](eval_results.md)
