@@ -2,6 +2,7 @@
 
 ## Table of Contents
 
+- [Stage 1: Data parsing validation (2026-07-09)](#stage-1-data-parsing-validation-2026-07-09)
 - [Stage 2: Embedding model comparison (2026-07-09)](#stage-2-embedding-model-comparison-2026-07-09)
 - [Stage 3: Hybrid retrieval + reranker (2026-07-10)](#stage-3-hybrid-retrieval--reranker-2026-07-10)
 - [Stage 4: Intent classifier validation (2026-07-10)](#stage-4-intent-classifier-validation-2026-07-10)
@@ -17,6 +18,26 @@
 - [Stage 5: Gemini Flash answer-generation verification (2026-07-31)](#stage-5-gemini-flash-answer-generation-verification-2026-07-31)
 - [Stage 6: formalizing the Flask API -- session profile + feedback (2026-08-01)](#stage-6-formalizing-the-flask-api----session-profile--feedback-2026-08-01)
 - [Stage 6's last piece: RAGAS quantitative evaluation (2026-08-01)](#stage-6s-last-piece-ragas-quantitative-evaluation-2026-08-01)
+
+## Stage 1: Data parsing validation (2026-07-09)
+
+### Method
+- Parsed 6 law PDFs (the Military Service Act, its Enforcement Decree,
+  Enforcement Rule, an MMA directive, an MND directive, and Attached Table 3)
+  into 272 chunks while preserving article/paragraph structure. The rule was
+  zero paraphrasing -- keep the original text verbatim. Attached Table 3 (a
+  table) was converted row-by-row into natural-language sentences.
+- 3 bugs found during sample verification.
+
+### Results -- 3 bugs found and their fixes
+
+| Bug | Scope of contamination | Fix |
+|---|---|---|
+| The `refers_to` (cross-reference) field was mistaking a chunk's own article number -- embedded in its own header -- for a cross-reference | 224 of 270 chunks (83%) | Fixed by extracting references only from the body text, before the header gets prepended |
+| PDF extraction split words across a mid-syllable line break ("사\n람" -> "사람") | 582 occurrences -> 22 (most of the remainder being legitimate 가/나/다 list markers) | Fixed with a function (`join_wrapped_lines`) that joins a "Hangul + newline + Hangul" pattern |
+| Attached Table 3's table-cell extraction inserted stray whitespace into category labels ("병역준비 역, 사회복 무요원...") | -- | Fixed by comparing against a whitespace-stripped copy |
+
+See the "Stage 1: Law-parsing pipeline" section of `docs/devlog-en.md` for more detail.
 
 ## Stage 2: Embedding model comparison (2026-07-09)
 
