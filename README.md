@@ -73,7 +73,7 @@ For a detailed walkthrough, please refer to [`docs/architecture-en.md`](docs/arc
 
 ## Data Sources
 
-The following documents are public government works collected from the [National Legal Information Center](law.go.kr) of the Republic of Korea. Documents are written in Korean, and English-translated documents (if available) can be accessed at this [link](https://www.law.go.kr/engLsSc.do?menuId=1&subMenuId=21&tabMenuId=117).
+The following documents are public government works collected from the [National Legal Information Center](https://www.law.go.kr) of the Republic of Korea. Documents are written in Korean, and English-translated documents (if available) can be accessed at this [link](https://www.law.go.kr/engLsSc.do?menuId=1&subMenuId=21&tabMenuId=117).
 
 - [Military Service Act](https://www.law.go.kr/법령/병역법)
 - [Enforcement Decree of the Military Service Act](https://www.law.go.kr/법령/병역법시행령)
