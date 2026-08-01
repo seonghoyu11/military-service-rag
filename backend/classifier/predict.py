@@ -57,14 +57,23 @@ def _detect_anchor_lookups(search_space):
     ]
 
 
-def classify(question):
+def classify(question, session_user_type=None):
     """
     Rule-based intent classification for an incoming user question.
     Returns user_type_tags/topic_tags (same vocabulary as pipeline/tagger.py,
     so they line up with chunk metadata for future filtered retrieval), plus
     an out_of_scope flag for topics deliberately excluded from the dataset.
+
+    session_user_type: the caller's saved profile (Stage 6 /api/profile),
+    used as a fallback ONLY when the question itself has no user-type signal
+    -- a question can be about a third party, so anything `_detect_user_types`
+    actually finds in the text always wins over the session default. This is
+    a pure UX convenience (skip re-typing "저는 영주권자인데..." every time);
+    it doesn't feed into retrieval ranking at all (see routes/query.py), only
+    the OOS message and the intent tags shown to the user.
     """
     search_space = question.lower()
+    session_fallback = [session_user_type] if session_user_type else []
 
     # Checked before the MMA-recruitment out-of-scope category: same
     # "out of scope" outcome, but for a structurally different reason (no
@@ -72,7 +81,7 @@ def classify(question):
     # rather than being folded into the MMA-link framing.
     if any(kw in search_space for kw in POST_SERVICE_KEYWORDS):
         return {
-            "user_type_tags": _detect_user_types(search_space),
+            "user_type_tags": _detect_user_types(search_space) or session_fallback,
             "topic_tags": [],
             "out_of_scope": True,
             "fallback_message": POST_SERVICE_FALLBACK_MESSAGE,
@@ -81,7 +90,7 @@ def classify(question):
         }
 
     if any(kw in search_space for kw in OUT_OF_SCOPE_KEYWORDS):
-        user_type_tags = _detect_user_types(search_space)
+        user_type_tags = _detect_user_types(search_space) or session_fallback
 
         if user_type_tags:
             guidance = OUT_OF_SCOPE_GUIDANCE_WITH_USER_TYPE.format(
@@ -101,9 +110,7 @@ def classify(question):
             "anchor_lookups": [],
         }
 
-    user_type_tags = _detect_user_types(search_space)
-    if not user_type_tags:
-        user_type_tags = ["전체"]
+    user_type_tags = _detect_user_types(search_space) or session_fallback or ["전체"]
 
     topic_tags = [
         tag for tag, keywords in TOPIC_KEYWORDS.items()

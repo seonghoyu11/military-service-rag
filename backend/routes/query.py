@@ -5,6 +5,7 @@ import sys
 from flask import Blueprint, request, jsonify
 
 from classifier.predict import classify
+from db.mongo import get_db
 from generation.answer import generate_answer
 from retrieval import bm25_search, hybrid, reranker
 
@@ -108,6 +109,24 @@ def _inject_anchor_chunks(candidates, anchor_lookups):
     return candidates + extra
 
 
+def _session_user_type(session_id):
+    """
+    Looks up the caller's saved profile (Stage 6 /api/profile) by session_id.
+    A Mongo hiccup here shouldn't take down the whole query -- worst case is
+    just falling back to the no-profile behavior, so failures are swallowed
+    and logged the same way generation failures are (see [answer_error]
+    above).
+    """
+    if not session_id:
+        return None
+    try:
+        doc = get_db()["profiles"].find_one({"_id": session_id})
+    except Exception as e:
+        print(f"[profile_lookup_error] session_id={session_id!r} error={e!r}", file=sys.stderr)
+        return None
+    return doc.get("user_type") if doc else None
+
+
 @query_bp.route("/api/query", methods=["POST"])
 def query():
     """
@@ -120,7 +139,10 @@ def query():
     if not question:
         return jsonify({"error": "question is required"}), 400
 
-    intent = classify(question)
+    session_id = (data.get("session_id") or "").strip()
+    session_user_type = _session_user_type(session_id)
+
+    intent = classify(question, session_user_type=session_user_type)
     if intent["out_of_scope"]:
         related_scope_info = None
         lookup = intent.get("related_lookup")

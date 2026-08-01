@@ -313,8 +313,10 @@ section of `docs/eval_results-en.md`.
   question → natural-language answer generation (eligibility judgment stays
   rule-based; the LLM's job is synthesis only). Faithfulness-spot-checked
   (see the "Stage 5" section in `docs/eval_results-en.md`).
-- **Stage 6**: formalize the Flask API (`/api/profile`, `/api/feedback`) +
-  RAGAS evaluation.
+- **Stage 6 (in progress)**: formalizing the Flask API — `/api/profile` (a
+  login-free, lightweight session profile) and `/api/feedback` (👍/👎
+  collection) are implemented and verified (see the "Stage 6" section in
+  `docs/eval_results-en.md`). RAGAS evaluation hasn't started yet.
 - **Stage 7**: the Next.js frontend — a Korean/English toggle via
   next-intl is required, since the target users are overseas Koreans.
 

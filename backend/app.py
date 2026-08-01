@@ -6,6 +6,8 @@ from flask import Flask
 from flask_cors import CORS
 
 from routes import query as query_module
+from routes import profile as profile_module
+from routes import feedback as feedback_module
 from classifier.model import POST_SERVICE_KEYWORDS
 
 
@@ -36,6 +38,8 @@ def create_app():
     app = Flask(__name__)
     CORS(app)
     app.register_blueprint(query_module.query_bp)
+    app.register_blueprint(profile_module.profile_bp)
+    app.register_blueprint(feedback_module.feedback_bp)
     return app
 
 

@@ -1155,3 +1155,99 @@ boundary) was kept intact, only the actual default was swapped for one that work
 citation-formatting bug for Table 3 chunks was found, fixed, and re-verified.
 
 Stage 5 (answer generation) is now implemented, integrated, and faithfulness-verified.
+
+## Stage 6: formalizing the Flask API -- session profile + feedback (2026-08-01)
+
+### Background
+
+Added a login-free, lightweight session profile (`/api/profile`) and feedback
+collection (`/api/feedback`). The session profile has zero involvement in retrieval
+accuracy logic -- it only affects `intent["user_type_tags"]` (used for the OOS message
+and the frontend's intent tags). In other words, this change is a UX improvement (no need
+to re-type your user type every time), not a retrieval-accuracy improvement. So the
+regression check here is framed as "did the retrieval top1/score stay the same," not "did
+user_type get applied."
+
+### New/modified files
+
+- New: `backend/routes/profile.py` (`POST /api/profile`, `GET /api/profile/<id>`)
+- New: `backend/routes/feedback.py` (`POST /api/feedback`)
+- Modified: `backend/classifier/predict.py` -- `classify(question, session_user_type=None)`.
+  Any user type explicitly detected in the question text always wins; the session profile
+  is only used as an `or` fallback when `_detect_user_types(search_space)` comes back
+  empty. All three branches (post-service / OOS / normal retrieval) apply the same
+  priority rule.
+- Modified: `backend/routes/query.py` -- parses `session_id`, adds a
+  `_session_user_type()` helper (wrapped in try/except so a Mongo failure doesn't take
+  down the query itself, logged as `[profile_lookup_error]`), and passes
+  `session_user_type` into `classify()`. Nothing else -- retrieval, reranking, boosting,
+  and answer generation logic are untouched.
+- Modified: `backend/app.py` -- registers the `profile_bp`/`feedback_bp` blueprints.
+
+### Clean restart check
+
+```
+[startup] pid=9556 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+ * Restarting with stat
+[startup] pid=9590 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+```
+
+`hash=2dc6d7a4`, 270 chunks -- identical to prior sessions, as expected since
+`law_chunks.json`/`POST_SERVICE_KEYWORDS` weren't touched by this work.
+
+### `/api/profile` basic behavior
+
+| Case | Request | Result |
+|---|---|---|
+| Valid upsert | `POST {"session_id":"test-1","user_type":"영주권자"}` | ✅ HTTP 200, `user_type: "영주권자"` |
+| Read-back | `GET /api/profile/test-1` | ✅ HTTP 200, returns the just-saved value |
+| Invalid user_type | `POST {"session_id":"test-bad","user_type":"군인"}` | ✅ HTTP 400, error lists valid values |
+| Missing session_id | `POST {"user_type":"영주권자"}` | ✅ HTTP 400 |
+
+### `/api/query` + session-profile integration (4 cases, real HTTP)
+
+| # | session_id (profile) | Question | Expected | Actual `user_type_tags` | Verdict |
+|---|---|---|---|---|---|
+| a | test-1 (permanent resident) | How do I get an overseas-travel permit? (no user type stated) | Session profile applies | `['영주권자']` | ✅ PASS |
+| b | test-1 (permanent resident) | I'm studying abroad -- what happens if I take a leave of absence? (states international student) | Question wins over session | `['유학생']` | ✅ PASS |
+| c | none | How do I get an overseas-travel permit? | Prior default behavior (`["전체"]`) preserved | `['전체']` | ✅ PASS |
+| d | test-2 (2nd-gen overseas Korean) | I want to apply for KATUSA (OOS branch) | Session profile applies even in the OOS branch + `related_scope_info` populated | `['재외동포2세']`, `related_scope_info` has 9 items, guidance message mentions "재외동포2세" | ✅ PASS |
+
+### Regression check -- retrieval results themselves must be unchanged
+
+Re-ran 3 existing anchor test queries without a `session_id` -- every one matched the
+prior record down to the exact score, no regressions. (Expected, since neither
+`classify()`'s `topic_tags`/`anchor_lookups` computation nor `routes/query.py`'s retrieval
+ranking logic was touched -- but confirmed empirically anyway.)
+
+| Question | top1 | Prior record | This run | Match? |
+|---|---|---|---|---|
+| Leave of absence while studying abroad -- does my postponement get cancelled? | Art. 27③ | 0.5618 | 0.5618 | ✅ |
+| Is it a problem if I have a part-time job? | Art. 22 | 0.3002 | 0.3002 | ✅ |
+| I'm a permanent resident -- until when can I avoid enlisting? | Table 3 | 0.3092 | 0.3092 | ✅ |
+
+### `/api/feedback` verification
+
+| Case | Request | Result |
+|---|---|---|
+| Valid submission | `POST {"session_id":"test-1","question":"...","rating":"up","comment":"도움됐어요"}` | ✅ HTTP 201, returns `id` |
+| Invalid rating | `POST {"question":"테스트","rating":"meh"}` | ✅ HTTP 400 |
+| Missing question | `POST {"rating":"down"}` | ✅ HTTP 400 |
+
+Confirmed the document actually landed in MongoDB's `feedback` collection:
+```
+{'_id': ObjectId('6a6e62ea61beb09f0e871244'), 'session_id': 'test-1',
+ 'question': '국외여행허가 어떻게 받나요?', 'rating': 'up', 'comment': '도움됐어요',
+ 'results': None, 'answer': None, 'created_at': datetime.datetime(2026, 8, 1, 21, 19, 38, 734000)}
+```
+The `profiles` collection also showed `test-1`/`test-2` correctly upserted. (These test
+documents were left in the database rather than cleaned up -- ask if you'd like them
+deleted.)
+
+### Conclusion
+
+All 5 files (2 new + 3 modified) applied, clean restart confirmed, profile/feedback API
+basic behavior passed all 4+3 cases, session-profile integration passed all 4 cases (the
+question's explicit signal always wins over the session profile, as designed), and all 3
+retrieval-ranking regression queries matched down to the score. No deployment sync issue
+or regression found.

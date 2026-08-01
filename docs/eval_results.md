@@ -954,3 +954,94 @@ system_instruction에도 "별표(표) 형태의 근거는 '○○ 시행령 별�
 수정하고 재검증까지 완료.
 
 Stage 5(답변 생성)는 기능 구현 + 통합 + faithfulness 검증까지 완료된 상태다.
+
+## Stage 6: Flask API 정식화 — 세션 프로필 + 피드백 (2026-08-01)
+
+### 배경
+
+로그인 없는 경량 세션 프로필(`/api/profile`)과 피드백 수집(`/api/feedback`)을
+추가했다. 세션 프로필은 검색 정확도 로직에는 전혀 관여하지 않고
+`intent["user_type_tags"]`에만 영향을 준다(OOS 안내문 + 프론트 태그 표시용) —
+즉 이번 변경은 UX 개선(매번 유저타입 재입력 안 해도 됨)이지 검색 정확도 개선이
+아니다. 그래서 회귀 확인도 "user_type이 반영됐는가"가 아니라 "검색 결과
+top1/점수가 그대로인가"로 잡았다.
+
+### 신규/수정 파일
+
+- 신규: `backend/routes/profile.py` (`POST /api/profile`, `GET /api/profile/<id>`)
+- 신규: `backend/routes/feedback.py` (`POST /api/feedback`)
+- 수정: `backend/classifier/predict.py` — `classify(question, session_user_type=None)`.
+  질문 텍스트에서 명시적으로 감지된 유저타입이 항상 우선이고, 세션 프로필은
+  `_detect_user_types(search_space)`가 빈 리스트일 때만 쓰는 `or` fallback.
+  post-service/OOS/정상 검색 세 분기 전부 동일한 우선순위 규칙 적용.
+- 수정: `backend/routes/query.py` — `session_id` 파싱 + `_session_user_type()`
+  헬퍼(Mongo 조회 실패해도 쿼리 자체는 안 죽도록 try/except, `[profile_lookup_error]`
+  로그) 추가, `classify()` 호출에 `session_user_type` 전달. 그 외 검색/재정렬/부스트/
+  답변생성 로직은 손대지 않음.
+- 수정: `backend/app.py` — `profile_bp`/`feedback_bp` 블루프린트 등록.
+
+### 클린 재시작 확인
+
+```
+[startup] pid=9556 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+ * Restarting with stat
+[startup] pid=9590 law_chunks.json: 270 chunks, mtime=1783695412 | POST_SERVICE_KEYWORDS: 12 keywords, hash=2dc6d7a4
+```
+
+`hash=2dc6d7a4`, 270 chunks — 이전 세션들과 완전히 동일. `law_chunks.json`/
+`POST_SERVICE_KEYWORDS`를 이번 작업에서 건드리지 않았으니 예상대로다.
+
+### `/api/profile` 기본 동작 검증
+
+| 케이스 | 요청 | 결과 |
+|---|---|---|
+| 정상 upsert | `POST {"session_id":"test-1","user_type":"영주권자"}` | ✅ HTTP 200, `user_type: "영주권자"` |
+| 조회 | `GET /api/profile/test-1` | ✅ HTTP 200, 방금 저장한 값 그대로 |
+| 잘못된 user_type | `POST {"session_id":"test-bad","user_type":"군인"}` | ✅ HTTP 400, 허용값 목록 에러 |
+| session_id 누락 | `POST {"user_type":"영주권자"}` | ✅ HTTP 400 |
+
+### `/api/query` + 세션 프로필 통합 (4개 케이스, 실제 HTTP)
+
+| # | session_id (프로필) | 질문 | 기대 | 실제 `user_type_tags` | 판정 |
+|---|---|---|---|---|---|
+| a | test-1 (영주권자) | 국외여행허가 어떻게 받나요? (유저타입 미명시) | 세션 프로필 사용 | `['영주권자']` | ✅ PASS |
+| b | test-1 (영주권자) | 유학 중인데 휴학하면 어떻게 되나요 (유학생 명시) | 질문이 세션보다 우선 | `['유학생']` | ✅ PASS |
+| c | 없음 | 국외여행허가 어떻게 받나요? | 기존 동작(`["전체"]`) 유지 | `['전체']` | ✅ PASS |
+| d | test-2 (재외동포2세) | 카투사 지원하고 싶은데 (OOS 분기) | OOS 분기에서도 세션 프로필 반영 + related_scope_info 채움 | `['재외동포2세']`, `related_scope_info` 9건, 안내문에 "재외동포2세" 반영 | ✅ PASS |
+
+### 회귀 확인 — 검색 결과 자체는 그대로여야 함
+
+session_id 없이 기존 anchor 테스트 쿼리 3개를 재실행 — 전부 이전 기록과 점수까지
+정확히 일치, 회귀 없음. (`classify()`의 `topic_tags`/`anchor_lookups` 계산 로직과
+`routes/query.py`의 검색 랭킹 로직은 이번에 손대지 않았으므로 당연한 결과지만,
+실제로도 재현됨을 확인.)
+
+| 질문 | top1 | 이전 기록 | 이번 결과 | 일치 |
+|---|---|---|---|---|
+| 유학 중인데 휴학하면 입영연기가 취소되나요 | 27조③ | 0.5618 | 0.5618 | ✅ |
+| 아르바이트하면 문제되나요 | 22조 | 0.3002 | 0.3002 | ✅ |
+| 영주권자인데 언제까지 입영 안 해도 되나요 | 별표3 | 0.3092 | 0.3092 | ✅ |
+
+### `/api/feedback` 검증
+
+| 케이스 | 요청 | 결과 |
+|---|---|---|
+| 정상 제출 | `POST {"session_id":"test-1","question":"...","rating":"up","comment":"도움됐어요"}` | ✅ HTTP 201, `id` 반환 |
+| 잘못된 rating | `POST {"question":"테스트","rating":"meh"}` | ✅ HTTP 400 |
+| question 누락 | `POST {"rating":"down"}` | ✅ HTTP 400 |
+
+MongoDB `feedback` 컬렉션에서 실제 문서 생성 확인:
+```
+{'_id': ObjectId('6a6e62ea61beb09f0e871244'), 'session_id': 'test-1',
+ 'question': '국외여행허가 어떻게 받나요?', 'rating': 'up', 'comment': '도움됐어요',
+ 'results': None, 'answer': None, 'created_at': datetime.datetime(2026, 8, 1, 21, 19, 38, 734000)}
+```
+`profiles` 컬렉션도 `test-1`/`test-2` 문서로 정상 upsert 확인. (테스트로 생성된
+이 문서들은 정리하지 않고 DB에 남겨뒀음 — 필요하면 삭제 요청할 것.)
+
+### 결론
+
+5개 파일(신규 2 + 수정 3) 전부 적용, 클린 재시작 확인, 프로필/피드백 API 기본
+동작 4+3개 케이스 전부 PASS, 세션 프로필 통합 4개 케이스 전부 PASS(질문의 명시적
+신호가 항상 세션 프로필보다 우선한다는 설계 의도대로 동작), 검색 랭킹 회귀 3개
+쿼리 전부 점수까지 동일. 배포 동기화 문제나 회귀 없음.
