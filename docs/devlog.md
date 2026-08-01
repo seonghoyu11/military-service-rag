@@ -236,9 +236,14 @@ citation 형식 준수, grounding 충실도)만 재검증하면 되는 구조라
 - **5단계 (완료)**: Google Gemini API 연동 — 검색된 근거조항 + 질문 → 자연어
   답변 생성 (판단은 rule-based, LLM은 종합·생성 역할만). faithfulness 스팟체크까지
   마침 (`docs/eval_results.md` "Stage 5" 섹션).
-- **6단계 (진행 중)**: Flask API 정식화 — `/api/profile`(로그인 없는 경량 세션
-  프로필), `/api/feedback`(👍/👎 수집) 구현·검증 완료(`docs/eval_results.md`
-  "Stage 6" 섹션). RAGAS 평가는 아직 착수 전.
+- **6단계 (완료)**: Flask API 정식화 — `/api/profile`(로그인 없는 경량 세션
+  프로필), `/api/feedback`(👍/👎 수집), RAGAS 정량 평가(`answer_question()`
+  코어 함수 분리 + RAGAS judge를 gemini_client 화이트리스트 경유로 구현)까지
+  전부 구현·실행 완료(`docs/eval_results.md` "Stage 6" 섹션들). 다만 RAGAS
+  수치 자체는 (1) `gemini-3.6-flash` 일일 quota가 20회로 낮아서 오늘 실행분은
+  생성 모델을 임시로 대체해 돌렸고 (2) ground_truth 4개가 어제 스팟체크 답변
+  재사용이라 순환적이라, "확정된 품질 지표"로 보기엔 이르다 — quota 초기화
+  후 재실행 필요.
 - **7단계**: Next.js 프론트 — next-intl 한/영 토글 필수 (재외국민 타겟이라서).
 
 관련 문서: [architecture.md](architecture.md) (전체 구조), [eval_results.md](eval_results.md)

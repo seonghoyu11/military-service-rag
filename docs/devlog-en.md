@@ -313,10 +313,17 @@ section of `docs/eval_results-en.md`.
   question → natural-language answer generation (eligibility judgment stays
   rule-based; the LLM's job is synthesis only). Faithfulness-spot-checked
   (see the "Stage 5" section in `docs/eval_results-en.md`).
-- **Stage 6 (in progress)**: formalizing the Flask API — `/api/profile` (a
-  login-free, lightweight session profile) and `/api/feedback` (👍/👎
-  collection) are implemented and verified (see the "Stage 6" section in
-  `docs/eval_results-en.md`). RAGAS evaluation hasn't started yet.
+- **Stage 6 (done)**: formalizing the Flask API — `/api/profile` (a
+  login-free, lightweight session profile), `/api/feedback` (👍/👎
+  collection), and RAGAS quantitative evaluation (extracted a pure
+  `answer_question()` core function; RAGAS's judge routes through the same
+  `gemini_client` whitelist as everything else) are all implemented and have
+  been run end-to-end (see the "Stage 6" sections in
+  `docs/eval_results-en.md`). The RAGAS numbers themselves aren't settled
+  yet, though -- (1) `gemini-3.6-flash`'s daily quota turned out to be a low
+  20, so today's run used a substituted generation model, and (2) the 4
+  ground_truth answers are reused from yesterday's spot check, which is
+  circular -- a clean re-run is needed once quota resets.
 - **Stage 7**: the Next.js frontend — a Korean/English toggle via
   next-intl is required, since the target users are overseas Koreans.
 

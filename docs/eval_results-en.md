@@ -1251,3 +1251,159 @@ basic behavior passed all 4+3 cases, session-profile integration passed all 4 ca
 question's explicit signal always wins over the session profile, as designed), and all 3
 retrieval-ranking regression queries matched down to the score. No deployment sync issue
 or regression found.
+
+## Stage 6's last piece: RAGAS quantitative evaluation (2026-08-01)
+
+### Background
+
+Wired RAGAS quantitative evaluation onto the retrieval+generation pipeline. Refactored
+`routes/query.py` so the `/api/query` view body is a pure function,
+`answer_question(question, session_user_type=None)`, and had RAGAS call that function
+directly (no HTTP) so it exercises the literal production code path -- same principle
+behind the earlier `answer_error` monkeypatch test.
+
+RAGAS's LLM judge does NOT use `langchain_google_genai.ChatGoogleGenerativeAI` directly --
+`generation/ragas_llm.py`'s `WhitelistedGeminiChatModel` internally routes every call
+through `gemini_client.generate()`, so judge calls get this project's "absolutely no
+billing" guardrails (model whitelist, 429 backoff) too. Embeddings (for answer_relevancy)
+run on local BGE-m3 (`pipeline/embedder.py`) instead of a Gemini embedding API, so that
+metric makes zero network calls.
+
+### New/modified files
+
+- New: `backend/generation/ragas_llm.py`, `backend/evaluation/ragas_embeddings.py`,
+  `backend/evaluation/ragas_eval.py`, `backend/data/eval/ragas_eval_set.json`
+- Modified: `backend/routes/query.py` -- extracted `answer_question()` as a pure function
+  (a no-logic-change refactor), `backend/requirements.txt` -- added `langchain-core` and
+  pinned `langchain-community==0.3.31` (reason below)
+
+### Refactor regression check (required before running RAGAS)
+
+Clean restart (`pkill -9 -f "app.py"` -> restart, confirmed `hash=2dc6d7a4`/270 chunks
+unchanged) followed by re-running 3 anchor queries over real HTTP -- confirmed the
+`answer_question()` extraction changed nothing about `/api/query`'s behavior.
+
+| Question | top1 | Prior record | This run |
+|---|---|---|---|
+| Leave of absence while studying abroad -- does my postponement get cancelled? | Art. 27③ | 0.5618 | 0.5618 ✅ |
+| Is it a problem if I have a part-time job? | Art. 22 | 0.3002 | 0.3002 ✅ |
+| I'm a permanent resident -- until when can I avoid enlisting? | Table 3 | 0.3092 | 0.3092 ✅ |
+
+### Dependency conflict found during install
+
+`ragas==0.4.3` (the latest release pip resolved) unconditionally imports
+`langchain_community.chat_models.vertexai.ChatVertexAI` at load time (an optional Vertex
+AI integration this project doesn't use) -- but that submodule doesn't exist at all in
+the latest `langchain-community` release (0.4.2, mid-"sunset," migrating individual
+provider integrations out into standalone packages), so `import ragas` failed outright.
+Fixed by pinning `langchain-community` to `0.3.31`, the last release that still has that
+submodule (`langchain-core` stays at 1.5.3, within its compatible range). Pinned in
+`requirements.txt` with the reason documented -- re-check this pin if ragas is ever
+upgraded.
+
+### Discovered while running -- `gemini-3.6-flash`'s real free-tier daily cap is 20
+
+Running `python3 evaluation/ragas_eval.py` as originally planned: only 1 of 12
+reference-free evaluations succeeded before the rest failed with `TimeoutError`, and the
+reference-based pass hit a 429 on its very first job:
+
+```
+ClientError(429 RESOURCE_EXHAUSTED. ... quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier',
+quotaDimensions: {'model': 'gemini-3.6-flash'}, quotaValue: '20' ...)
+```
+
+This account's actual daily cap for `gemini-3.6-flash` turned out to be **20 requests**
+-- far below the "~1000-1500/day" assumed when Stage 5 was designed. Today's session had
+already used a good chunk of that from Stage 6's profile-integration tests and anchor
+regression checks before RAGAS even started; adding the pipeline's 6 generation calls plus
+roughly 12-20 judge calls on top exhausted it almost immediately. A direct re-check
+confirmed it was already 429 by that point.
+
+**Two fixes landed in code** (`evaluation/ragas_eval.py`):
+1. **Separated the judge model from the generation model** -- added a `JUDGE_MODEL`
+   constant pointing the judge at `gemini-3.5-flash-lite` (a different whitelisted model,
+   its own quota bucket), so generation (`generate_answer()`) and judging no longer
+   compete for the same model's daily quota.
+2. **Serialized RAGAS's concurrency** -- RAGAS's defaults (`max_workers=16`,
+   `max_retries=10`) fire far more concurrent requests than the free tier's ~10-15 RPM can
+   absorb; a handful of real 429s turned into a wall of `TimeoutError`s once RAGAS's own
+   retry-of-retries piled on top of `gemini_client.py`'s own capped backoff. Fixed with
+   `RunConfig(max_workers=1, max_retries=1)`.
+
+### Today-only workaround -- generation also had to switch models (important, read together with the above)
+
+Even with those fixes, `gemini-3.6-flash` (Stage 5's actual production default) was
+already at its daily cap for today (confirmed 429 on a direct re-check), so to get real
+numbers today, `generation.answer.DEFAULT_MODEL` was temporarily bound to
+`gemini-3.5-flash-lite` via `unittest.mock.patch`, **for this one run only**. **The
+codebase itself was not touched** -- `generation/gemini_client.py`'s `DEFAULT_MODEL` is
+still `gemini-3.6-flash`, and calling `/api/query` right now still generates answers with
+`gemini-3.6-flash`.
+
+**In other words, the numbers below reflect the quality of `gemini-3.5-flash-lite`'s
+generation, not the quality of the model actually deployed in Stage 5
+(`gemini-3.6-flash`).** Retrieval is 100% the real production path; only the generation
+model was swapped, and only because of today's quota situation -- read the numbers with
+that in mind.
+
+### Results
+
+`_run_pipeline`: 6 of 8 questions produced an answer. 2 were skipped by design because
+`low_confidence=True` (`generate_answer()` was never called) -- "I have dual citizenship,
+would working in Korea count against me?" (raw score 0.0007, a question with no
+ground_truth to begin with, included specifically to verify the skip logic) and "I'm a
+PhD student -- am I recognized as an international student too?" (raw top1 0.0245, matches
+the same low-confidence result from yesterday's new-query verification session --
+confirms reproducibility).
+
+**Reference-free (6 questions, faithfulness + answer_relevancy):**
+
+| Metric | Score |
+|---|---|
+| faithfulness | 0.2778 |
+| answer_relevancy | 0.2670 |
+
+**Reference-based (4 ground_truth-labeled questions, context_precision + context_recall):**
+
+| Metric | Score |
+|---|---|
+| context_precision (LLMContextPrecisionWithReference) | NaN (4 of 8 jobs hit a 180s timeout -- every failure was on this metric specifically. Not "a low score" -- no score was ever produced) |
+| context_recall | 0.7917 |
+
+### Limitations that must be read alongside these numbers (not glossing over them to look cleaner)
+
+1. **The 4 ground_truth answers aren't independent references.** They're the exact
+   Gemini responses already citation-verified in yesterday's (07-31) Stage 5 faithfulness
+   spot check, reused as-is rather than freshly hand-written gold answers -- there's a
+   circularity here. In particular, context_recall (0.7917) measures how well the
+   retrieved articles cover the ground_truth, and that ground_truth was itself generated
+   from the same retrieval yesterday, which could be inflating the score relative to a
+   truly independent reference.
+2. **Today's run used a substituted generation model** (see the section above) -- the
+   faithfulness/answer_relevancy scores around 0.28 grade `gemini-3.5-flash-lite`'s
+   answers, not `gemini-3.6-flash`'s.
+3. **A faithfulness of 0.28 doesn't square with yesterday's manual spot check (5/5
+   citations accurate, nothing fabricated).** The root cause wasn't pinned down here --
+   candidate hypotheses: (a) RAGAS's Faithfulness metric decomposes the answer into
+   atomic claims and checks each against `retrieved_contexts`; the lite judge model may
+   have been overly strict (or simply wrong) about matching formal statutory phrasing
+   against the answer's paraphrases, or (b) the lite generation model's answers may have
+   genuinely had weaker grounding than the `gemini-3.6-flash` answers spot-checked
+   yesterday. Neither is ruled out. Without further investigation, this number shouldn't
+   be read as "the pipeline hallucinates 73% of the time" -- yesterday's manual
+   verification (which cross-checked actual article numbers) is the more trustworthy
+   signal right now.
+4. **context_precision failed to compute -- it isn't a bad score.** NaN means all 4
+   scoring attempts timed out, not that precision was measured and found lacking.
+
+### Conclusion
+
+All 6 files applied, no refactor regression, and the RAGAS pipeline itself ran end-to-end
+and produced real numbers. That said, four caveats -- (1) `gemini-3.6-flash`'s daily quota
+turned out to be a very low 20, (2) today's run used a substituted generation model, (3)
+the ground_truth circularity, (4) context_precision never got scored -- mean today's
+numbers shouldn't be treated as this pipeline's settled quality metrics yet. The code
+fixes (separated judge model, serialized RunConfig) are in place and unchanged, so once
+`gemini-3.6-flash`'s quota resets (some day after today), re-running
+`python3 evaluation/ragas_eval.py` as-is (no model patch) will produce numbers against the
+actual production model.

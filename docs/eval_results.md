@@ -1045,3 +1045,154 @@ MongoDB `feedback` 컬렉션에서 실제 문서 생성 확인:
 동작 4+3개 케이스 전부 PASS, 세션 프로필 통합 4개 케이스 전부 PASS(질문의 명시적
 신호가 항상 세션 프로필보다 우선한다는 설계 의도대로 동작), 검색 랭킹 회귀 3개
 쿼리 전부 점수까지 동일. 배포 동기화 문제나 회귀 없음.
+
+## Stage 6 마지막 조각: RAGAS 정량 평가 (2026-08-01)
+
+### 배경
+
+검색+생성 파이프라인에 RAGAS 정량 평가를 붙였다. `routes/query.py`를
+리팩터링해서 `/api/query` 뷰 본문을 `answer_question(question,
+session_user_type=None)` 순수 함수로 분리하고, RAGAS가 HTTP 요청 없이 이
+함수를 직접 호출해서 실제 프로덕션 코드 경로 그대로 평가하게 했다(예전
+`answer_error` monkeypatch 검증과 같은 철학).
+
+RAGAS의 LLM judge는 `langchain_google_genai.ChatGoogleGenerativeAI`를 직접
+쓰지 않고, `generation/ragas_llm.py`의 `WhitelistedGeminiChatModel`이
+내부적으로 `gemini_client.generate()`를 그대로 호출하도록 구현했다 —
+judge 호출도 이 프로젝트의 "절대 과금 안 됨" 안전장치(모델 화이트리스트,
+429 backoff)를 그대로 통과하게 하기 위함. embeddings(answer_relevancy용)는
+Gemini API 대신 로컬 BGE-m3(`pipeline/embedder.py` 재사용)로 처리해서
+네트워크 호출 자체가 없다.
+
+### 신규/수정 파일
+
+- 신규: `backend/generation/ragas_llm.py`, `backend/evaluation/ragas_embeddings.py`,
+  `backend/evaluation/ragas_eval.py`, `backend/data/eval/ragas_eval_set.json`
+- 수정: `backend/routes/query.py` — `answer_question()` 순수 함수 분리(로직
+  변경 없는 리팩터링), `backend/requirements.txt` — `langchain-core`,
+  `langchain-community==0.3.31`(사유는 아래) 추가
+
+### 리팩터링 회귀 확인 (RAGAS 실행 전 필수 절차)
+
+클린 재시작(`pkill -9 -f "app.py"` → 재기동, hash=2dc6d7a4/270 chunks 이전과
+동일 확인) 후 anchor 쿼리 3개를 실제 HTTP로 재실행 — `answer_question()` 분리가
+`/api/query` 동작을 전혀 안 바꿨음을 확인.
+
+| 질문 | top1 | 이전 기록 | 이번 결과 |
+|---|---|---|---|
+| 유학 중인데 휴학하면 입영연기가 취소되나요 | 27조③ | 0.5618 | 0.5618 ✅ |
+| 아르바이트하면 문제되나요 | 22조 | 0.3002 | 0.3002 ✅ |
+| 영주권자인데 언제까지 입영 안 해도 되나요 | 별표3 | 0.3092 | 0.3092 ✅ |
+
+### 설치 중 발견한 의존성 충돌
+
+`ragas==0.4.3`(pip이 자동으로 잡은 최신판)이 로드 시점에 무조건
+`langchain_community.chat_models.vertexai.ChatVertexAI`를 import하는데(이
+프로젝트가 안 쓰는 Vertex AI 통합), 이 서브모듈이 `langchain-community`
+최신판(0.4.2, "sunset" 진행 중이라 개별 통합 모듈들을 별도 패키지로 이전하며
+제거)에는 아예 없어서 `import ragas` 자체가 실패했다. `langchain-community`를
+그 서브모듈이 아직 있던 `0.3.31`로 고정해서 해결(`langchain-core`는 여전히
+1.5.3, 호환 범위 안). `requirements.txt`에 사유와 함께 핀 고정해뒀다 — ragas가
+업그레이드되면 이 핀도 재확인 필요.
+
+### 실행 중 발견 — `gemini-3.6-flash`의 실제 무료 티어 일일 한도는 20회
+
+원래 계획대로 `python3 evaluation/ragas_eval.py`를 실행했더니, reference-free
+12개 평가 중 1개만 성공하고 나머지가 전부 `TimeoutError`로 실패했고
+reference-based는 첫 job부터 바로 429가 났다:
+
+```
+ClientError(429 RESOURCE_EXHAUSTED. ... quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier',
+quotaDimensions: {'model': 'gemini-3.6-flash'}, quotaValue: '20' ...)
+```
+
+`gemini-3.6-flash`의 이 계정 실측 일일 한도가 **20회**였다 — Stage 5 설계 당시
+가정했던 "일 1000~1500회"보다 훨씬 낮다. 오늘 세션에서 Stage 6 프로필 통합
+테스트 + anchor 회귀 확인들로 이미 상당수를 써버린 상태였고, RAGAS의 파이프라인
+실행(생성 6회) + judge 호출(대략 12~20회)을 더하니 순식간에 소진됐다. 직접
+호출로 재확인해도 그 시점엔 이미 429였다.
+
+**코드에 반영한 수정 2가지** (`evaluation/ragas_eval.py`):
+1. **judge 모델을 생성 모델과 분리** — judge는 `gemini-3.5-flash-lite`(별도
+   화이트리스트 모델, 별도 quota 버킷)를 쓰도록 `JUDGE_MODEL` 상수 추가.
+   생성(`generate_answer()`)과 judge가 같은 모델의 같은 일일 quota를 두고
+   경쟁하지 않게 됨.
+2. **RAGAS 동시성을 직렬화** — RAGAS 기본값(`max_workers=16`,
+   `max_retries=10`)은 무료 티어 RPM(10~15)을 훨씬 초과하는 동시 요청을
+   쏴서, 진짜 429 몇 개가 `gemini_client.py`의 자체 백오프와 RAGAS 자체
+   재시도가 겹치며 `TimeoutError` 폭탄으로 번졌다. `RunConfig(max_workers=1,
+   max_retries=1)`로 직렬화해서 재발 방지.
+
+### 오늘 실행 한정 임시 조치 — 생성 모델도 quota 소진으로 대체 (중요, 반드시 함께 읽을 것)
+
+수정을 반영해도 `gemini-3.6-flash`(Stage 5의 실제 운영 기본값)는 오늘 quota가
+이미 바닥나 있어서(재확인 결과 즉시 429), 오늘 하루치 결과를 얻으려고
+**이번 실행 1회에 한해서만** `generation.answer.DEFAULT_MODEL`을
+`unittest.mock.patch`로 `gemini-3.5-flash-lite`에 임시로 바인딩해서 돌렸다.
+**코드베이스는 전혀 안 건드림** — `generation/gemini_client.py`의
+`DEFAULT_MODEL`은 여전히 `gemini-3.6-flash` 그대로고, `/api/query`를 실제로
+호출하면 지금도 `gemini-3.6-flash`로 답변이 생성된다.
+
+**즉 아래 수치는 "지금 배포된 Stage 5 기본 모델(`gemini-3.6-flash`)의 실제
+품질"이 아니라 "대체 모델(`gemini-3.5-flash-lite`)로 생성했을 때의 품질"이다.**
+검색(retrieval) 쪽은 100% 실제 프로덕션 경로 그대로고, 생성 모델만 오늘의
+quota 사정으로 바뀐 것 — 이 한계를 감안하고 아래 수치를 읽어야 한다.
+
+### 실행 결과
+
+`_run_pipeline`: 8문항 중 6개가 답변 생성됨. 2개는 `low_confidence=True`라
+설계대로 스킵됨(`generate_answer()` 자체가 호출 안 됨) — "이중국적인데 한국에서
+취업하면 불이익 있나요"(raw score 0.0007, 애초에 ground_truth도 없는 스킵
+로직 검증용 문항), "박사과정 중인데 저도 유학생으로 인정되나요"(raw top1
+0.0245, 어제 신규 쿼리 검증 세션에서도 동일하게 low_confidence였던 것과
+일치 — 재현성 확인).
+
+**Reference-free (6문항, faithfulness + answer_relevancy):**
+
+| 메트릭 | 점수 |
+|---|---|
+| faithfulness | 0.2778 |
+| answer_relevancy | 0.2670 |
+
+**Reference-based (ground_truth 라벨된 4문항, context_precision + context_recall):**
+
+| 메트릭 | 점수 |
+|---|---|
+| context_precision (LLMContextPrecisionWithReference) | NaN (8개 job 중 4개가 180초 타임아웃 — 실패한 게 전부 이 메트릭 쪽. "낮은 점수"가 아니라 "채점 자체가 안 됨") |
+| context_recall | 0.7917 |
+
+### 수치 해석 시 반드시 감안해야 할 한계 (수치를 실제보다 깨끗하게 포장하지 말 것)
+
+1. **ground_truth 4개는 독립적인 정답이 아니다.** 어제(7/31) Stage 5
+   faithfulness 스팟체크에서 이미 조항 대조까지 검증됐던 실제 Gemini 응답을
+   그대로 재사용한 것이다. 완전히 새로 작성한 gold answer가 아니라서
+   순환적인 면이 있다 — 특히 context_recall(0.7917)은 "검색된 조항이
+   ground_truth를 얼마나 커버하는가"를 재는데, 그 ground_truth 자체가 같은
+   검색 결과를 보고 어제 생성된 답변이라서 점수가 실제보다 유리하게 나올
+   가능성이 있다.
+2. **오늘 실행분은 생성 모델이 대체됐다** (바로 위 섹션 참고) — faithfulness/
+   answer_relevancy 0.28 안팎 점수는 `gemini-3.6-flash`가 아니라
+   `gemini-3.5-flash-lite`가 생성한 답변을 채점한 결과다.
+3. **faithfulness 0.28은 어제 수동 스팟체크(5/5 citation 정확, 조작 없음)와
+   체감상 안 맞는다.** 원인을 여기서 확정하지는 못했다 — 가설로는 (a)
+   RAGAS의 Faithfulness가 답변을 원자적 주장(claim) 단위로 쪼개 각각을
+   retrieved_contexts와 대조하는데, 법조문 특유의 격식체 표현과 답변의
+   패러프레이즈 사이 의미적 매칭을 lite 모델 judge가 엄격하게(또는 잘못)
+   판단했을 가능성, (b) 애초에 lite 생성 모델의 답변이 어제 스팟체크한
+   `gemini-3.6-flash` 답변보다 grounding이 실제로 약했을 가능성, 둘 다
+   배제 못 함. 추가 조사 없이 "파이프라인이 27% 신뢰도로 환각한다"고
+   해석하면 안 됨 — 어제 수동 검증(조항 번호 대조까지 마친) 쪽이 더 신뢰도
+   높은 신호다.
+4. **context_precision은 실패, 성공이 아니다.** NaN은 "정밀도가 나쁘다"가
+   아니라 "4개 판정 시도가 전부 타임아웃나서 값 자체가 없다"는 뜻.
+
+### 결론
+
+6개 파일 적용, 리팩터링 회귀 없음 확인, RAGAS 파이프라인 자체는 실제로 끝까지
+돌아가서 숫자를 냈다. 다만 (1) `gemini-3.6-flash` 일일 quota가 20회로 매우
+낮다는 것, (2) 오늘 실행분은 생성 모델이 대체됐다는 것, (3) ground_truth의
+순환성, (4) context_precision 미채점 — 이 네 가지 한계 때문에 오늘 나온 수치를
+"이 파이프라인의 확정 품질 지표"로 쓰기는 이르다. 코드(judge 모델 분리,
+RunConfig 직렬화)는 정상 상태로 남아있으니, `gemini-3.6-flash` quota가
+초기화된 뒤(내일 이후) `python3 evaluation/ragas_eval.py`를 그대로(모델
+패치 없이) 재실행하면 실제 운영 모델 기준 수치를 얻을 수 있다.

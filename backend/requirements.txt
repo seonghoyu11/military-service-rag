@@ -20,3 +20,11 @@ langdetect
 
 ragas
 datasets
+langchain-core
+# Pinned: ragas 0.4.3 unconditionally imports langchain_community.chat_models.vertexai
+# at load time (an optional Vertex AI integration this project doesn't use), but that
+# submodule was removed from langchain-community's latest release (0.4.2, part of its
+# ongoing "sunset" migration to standalone integration packages) -- so the unpinned
+# combo fails on `import ragas`. Pinning to a pre-removal release fixes the import.
+# Re-check this pin if ragas is ever upgraded.
+langchain-community==0.3.31

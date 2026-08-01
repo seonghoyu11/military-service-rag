@@ -127,21 +127,16 @@ def _session_user_type(session_id):
     return doc.get("user_type") if doc else None
 
 
-@query_bp.route("/api/query", methods=["POST"])
-def query():
+def answer_question(question, session_user_type=None):
     """
     Classifies the question, returns the top-ranked law chunks (hybrid
     retrieval + reranker), and -- when confident enough -- a Gemini-generated
     answer grounded in those chunks.
+
+    Pulled out of the /api/query view (Stage 6) so RAGAS evaluation
+    (evaluation/ragas_eval.py) can call the exact same production code path
+    directly, without going through HTTP or reimplementing any of this.
     """
-    data = request.get_json(silent=True) or {}
-    question = (data.get("question") or "").strip()
-    if not question:
-        return jsonify({"error": "question is required"}), 400
-
-    session_id = (data.get("session_id") or "").strip()
-    session_user_type = _session_user_type(session_id)
-
     intent = classify(question, session_user_type=session_user_type)
     if intent["out_of_scope"]:
         related_scope_info = None
@@ -159,12 +154,12 @@ def query():
                 if c["law_name"] == lookup["law_name"] and c["article_no"] == lookup["article_no"]
             ]
 
-        return jsonify({
+        return {
             "out_of_scope": True,
             "message": intent["fallback_message"],
             "intent": intent,
             "related_scope_info": related_scope_info,
-        })
+        }
 
     candidates = hybrid.search(question, _bm25, _chunks, top_k=40, candidate_pool=50)
     candidates = _inject_anchor_chunks(candidates, intent.get("anchor_lookups"))
@@ -216,7 +211,7 @@ def query():
             print(f"[answer_error] query={question!r} error={e!r}", file=sys.stderr)
             answer_error = f"{type(e).__name__}: {e}"
 
-    return jsonify({
+    return {
         "out_of_scope": False,
         "intent": intent,
         "results": results,
@@ -225,4 +220,17 @@ def query():
         "low_confidence_notice": LOW_CONFIDENCE_NOTICE if low_confidence else None,
         "answer": answer,
         "answer_error": answer_error,
-    })
+    }
+
+
+@query_bp.route("/api/query", methods=["POST"])
+def query():
+    data = request.get_json(silent=True) or {}
+    question = (data.get("question") or "").strip()
+    if not question:
+        return jsonify({"error": "question is required"}), 400
+
+    session_id = (data.get("session_id") or "").strip()
+    session_user_type = _session_user_type(session_id)
+
+    return jsonify(answer_question(question, session_user_type=session_user_type))
