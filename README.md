@@ -26,6 +26,7 @@ An LLM (RAG)-based chatbot designed to provide administrative guidance on milita
   - [3. Load the law corpus into MongoDB (one-time)](#3-load-the-law-corpus-into-mongodb-one-time)
   - [4. Start the backend](#4-start-the-backend)
   - [5. Open the UI](#5-open-the-ui)
+- [API Reference](#api-reference)
 - [Evaluation Results](#evaluation-results)
 - [Development Logs](#development-logs)
 - [License](#license)
@@ -151,6 +152,40 @@ the API above:
 ```bash
 open frontend/prototype.html   # or just double-click it in Finder
 ```
+
+## API Reference
+
+Base URL: `http://localhost:5001`
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/api/query` | Ask a question -- runs intent classification → hybrid retrieval → rerank → (if confident) a Gemini-generated answer |
+| POST | `/api/feedback` | Record a 👍/👎 (+ optional comment) on a previous `/api/query` response |
+| POST | `/api/profile` | Save/update a session's declared user type (e.g. 영주권자) |
+| GET | `/api/profile/<session_id>` | Fetch a session's declared user type |
+
+```bash
+# Ask a question
+curl -X POST http://localhost:5001/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "영주권자인데 입영연기 신청 언제까지 해야 하나요?", "session_id": "optional-uuid"}'
+
+# Submit feedback on an answer
+curl -X POST http://localhost:5001/api/feedback \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "...", "question": "...", "rating": "up", "comment": "optional"}'
+
+# Save the session's user type
+curl -X POST http://localhost:5001/api/profile \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "...", "user_type": "영주권자"}'
+
+# Fetch the session's user type
+curl http://localhost:5001/api/profile/<session_id>
+```
+
+`user_type` must be one of `영주권자`, `재외동포2세`, `이중국적자`, `유학생`, `기타`.
+`rating` (for `/api/feedback`) must be `up` or `down`.
 
 ## Evaluation Results
 Quantitative evaluation metrics (including retrieval accuracy, answer faithfulness, etc.) are thoroughly documented in [`docs/eval_results-en.md`](docs/eval_results-en.md).

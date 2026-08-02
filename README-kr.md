@@ -28,6 +28,7 @@ RAG 기반 병역 행정절차 안내 챗봇입니다.
   - [3. 법령 코퍼스를 MongoDB에 적재 (최초 1회)](#3-법령-코퍼스를-mongodb에-적재-최초-1회)
   - [4. 백엔드 실행](#4-백엔드-실행)
   - [5. UI 열기](#5-ui-열기)
+- [API 레퍼런스](#api-레퍼런스)
 - [평가 결과](#평가-결과)
 - [개발자 노트](#개발자-노트)
 - [License](#license)
@@ -155,6 +156,40 @@ Next.js 프론트엔드(7단계)는 아직 구현 전입니다 — 지금 실제
 ```bash
 open frontend/prototype.html   # 또는 Finder에서 더블클릭
 ```
+
+## API 레퍼런스
+
+Base URL: `http://localhost:5001`
+
+| Method | Endpoint | 설명 |
+|---|---|---|
+| POST | `/api/query` | 질문하기 -- intent classification → hybrid retrieval → rerank → (확신도가 충분하면) Gemini 답변 생성 순으로 처리 |
+| POST | `/api/feedback` | 이전 `/api/query` 응답에 대해 👍/👎 (+ 선택적 코멘트) 기록 |
+| POST | `/api/profile` | 세션의 유저 유형(영주권자 등) 저장/업데이트 |
+| GET | `/api/profile/<session_id>` | 세션의 유저 유형 조회 |
+
+```bash
+# 질문하기
+curl -X POST http://localhost:5001/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "영주권자인데 입영연기 신청 언제까지 해야 하나요?", "session_id": "optional-uuid"}'
+
+# 답변에 대한 피드백 남기기
+curl -X POST http://localhost:5001/api/feedback \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "...", "question": "...", "rating": "up", "comment": "optional"}'
+
+# 세션의 유저 유형 저장
+curl -X POST http://localhost:5001/api/profile \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "...", "user_type": "영주권자"}'
+
+# 세션의 유저 유형 조회
+curl http://localhost:5001/api/profile/<session_id>
+```
+
+`user_type`은 `영주권자`, `재외동포2세`, `이중국적자`, `유학생`, `기타` 중 하나여야 합니다.
+`rating`(`/api/feedback`용)은 `up` 또는 `down`이어야 합니다.
 
 ## 평가 결과
 
