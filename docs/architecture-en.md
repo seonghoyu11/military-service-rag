@@ -11,7 +11,8 @@
   - [Stage 3: Hybrid retrieval (BM25 + Dense + Reranker) — Done](#stage-3-hybrid-retrieval-bm25--dense--reranker--done)
   - [Stage 4: Intent classifier (lightweight, rule-based) — Done](#stage-4-intent-classifier-lightweight-rule-based--done)
   - [Stage 5: Answer generation (Google Gemini API) — Done](#stage-5-answer-generation-google-gemini-api--done)
-  - [Stage 6 onward: Not started](#stage-6-onward-not-started)
+  - [Stage 6: Flask API — session profile + feedback — Done](#stage-6-flask-api--session-profile--feedback--done)
+  - [Stage 7: Next.js frontend — Not started](#stage-7-nextjs-frontend-not-started)
 - [Scope decisions](#scope-decisions)
 
 ## Overall structure
@@ -115,9 +116,26 @@ retrieved article text, generation skipped on `low_confidence`/empty results),
 wired into `routes/query.py`, and faithfulness-spot-checked (full results in
 `docs/eval_results-en.md`).
 
-### Stage 6 onward: Not started
-Finishing the Flask API, Next.js frontend (stage 7, including the next-intl
-EN/KO toggle) — to be built in order per the plan.
+### Stage 6: Flask API — session profile + feedback — Done
+- `routes/query.py`: `POST /api/query` — wraps the Stage 1-5 pipeline
+  (classify → hybrid retrieval → rerank → generate) behind an HTTP endpoint,
+  looking up the caller's saved profile (if any) by `session_id` to bias
+  classification.
+- `routes/profile.py`: `POST /api/profile` and `GET /api/profile/<session_id>`
+  — a login-free, upsert-based session profile (declared user type) keyed by
+  a client-generated `session_id`, so the type doesn't need to be re-typed on
+  every question.
+- `routes/feedback.py`: `POST /api/feedback` — records a 👍/👎 (+ optional
+  comment) plus a snapshot of the question/answer/results, both as a basic
+  usage signal and as raw material for curating RAGAS ground truth later.
+- Full request/response shapes and `curl` examples are in the top-level
+  [`README.md`](../README.md#api-reference).
+
+### Stage 7: Next.js frontend — Not started
+The only working UI so far is the self-contained static page
+`frontend/prototype.html`, which talks to the Stage 6 API directly. The
+Next.js frontend (including the next-intl EN/KO toggle) has not been built
+yet.
 
 ## Scope decisions
 - **KATUSA / language-soldier recruitment**: deliberately excluded from the

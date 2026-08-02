@@ -11,7 +11,8 @@
   - [3단계: Hybrid Retrieval (BM25 + Dense + Reranker) — 완료](#3단계-hybrid-retrieval-bm25--dense--reranker--완료)
   - [4단계: Intent Classifier (경량, rule-based) — 완료](#4단계-intent-classifier-경량-rule-based--완료)
   - [5단계: 답변 생성 (Google Gemini API) — 완료](#5단계-답변-생성-google-gemini-api--완료)
-  - [6~7단계 이후: 미착수](#67단계-이후-미착수)
+  - [6단계: Flask API — 세션 프로필 + 피드백 — 완료](#6단계-flask-api--세션-프로필--피드백--완료)
+  - [7단계: Next.js 프론트엔드 — 미착수](#7단계-nextjs-프론트엔드--미착수)
 - [스코프 결정 사항](#스코프-결정-사항)
 
 ## 전체 구조
@@ -83,8 +84,23 @@ Anthropic Claude API에서 Google Gemini API로 전환 결정 (전환 사유는 
 포함 답변 생성, `low_confidence`/빈 결과 시 생성 스킵)로 구현하고 `routes/query.py`에
 통합, faithfulness 스팟체크까지 완료 (상세 결과는 `docs/eval_results.md` 참고).
 
-### 6~7단계 이후: 미착수
-Flask API 마무리, Next.js 프론트(7단계, next-intl 한/영 토글 포함) — 계획대로 순서대로 진행 예정.
+### 6단계: Flask API — 세션 프로필 + 피드백 — 완료
+- `routes/query.py`: `POST /api/query` — 1~5단계 파이프라인(분류 → hybrid
+  retrieval → rerank → 답변 생성)을 HTTP 엔드포인트로 감쌈. `session_id`로
+  저장된 프로필이 있으면 찾아서 분류에 반영.
+- `routes/profile.py`: `POST /api/profile`, `GET /api/profile/<session_id>`
+  — 로그인 없이 클라이언트가 생성한 `session_id`로 유저 유형(영주권자 등)을
+  upsert 저장/조회. 질문마다 유형을 다시 입력하지 않아도 됨.
+- `routes/feedback.py`: `POST /api/feedback` — 👍/👎(+ 선택적 코멘트)와
+  질문/답변/결과 스냅샷을 저장. 기본적인 사용성 지표이자, 추후 RAGAS
+  ground truth 큐레이션 원재료로 활용.
+- 요청/응답 형식과 `curl` 예시는 최상위 [`README-kr.md`](../README-kr.md#api-레퍼런스)
+  참고.
+
+### 7단계: Next.js 프론트엔드 — 미착수
+현재 유일하게 동작하는 UI는 6단계 API에 직접 요청을 보내는 정적 페이지
+`frontend/prototype.html`뿐입니다. next-intl 한/영 토글을 포함한 Next.js
+프론트엔드는 아직 구현되지 않았습니다.
 
 ## 스코프 결정 사항
 - **카투사/어학병 등 모집병**: 데이터셋에 포함하지 않기로 결정 (지원자격이 법조문이 아니라 매년
