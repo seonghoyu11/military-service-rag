@@ -20,6 +20,12 @@ An LLM (RAG)-based chatbot designed to provide administrative guidance on milita
 - [Data Sources](#data-sources)
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
+  - [Prerequisites](#prerequisites)
+  - [1. Configure environment](#1-configure-environment)
+  - [2. Install dependencies](#2-install-dependencies)
+  - [3. Load the law corpus into MongoDB (one-time)](#3-load-the-law-corpus-into-mongodb-one-time)
+  - [4. Start the backend](#4-start-the-backend)
+  - [5. Open the UI](#5-open-the-ui)
 - [Evaluation Results](#evaluation-results)
 - [Development Logs](#development-logs)
 - [License](#license)
@@ -95,24 +101,55 @@ backend/
 ├── db/             # MongoDB connection setup
 └── evaluation/     # RAGAS-based quantitative evaluation
 
-frontend/           # Next.js App (Chat UI, User Profiles, EN/KO Toggle)
+frontend/           # prototype.html (currently working UI) + Next.js scaffolding (Stage 7, not yet built)
 scripts/            # DB configuration & pipeline execution scripts
 docs/               # Architecture deep-dives & evaluation reports
 ```
 
 ## Getting Started
 
-```bash
-# Backend
-cd backend
-pip install -r requirements.txt --break-system-packages
-cp .env.example .env   # Fill in your GOOGLE_API_KEY and MONGO_URI
-python app.py
+### Prerequisites
+- Python 3.12+
+- A [MongoDB Atlas](https://www.mongodb.com/atlas) cluster (the free M0 tier
+  works fine — Atlas Vector Search is available on it too) and its connection
+  string
+- A [Google AI Studio](https://aistudio.google.com/apikey) API key (free
+  tier, no card required)
 
-# Frontend
-cd frontend
-npm install
-npm run dev
+### 1. Configure environment
+```bash
+cd backend
+cp .env.example .env   # fill in GOOGLE_API_KEY and MONGO_URI
+```
+
+### 2. Install dependencies
+```bash
+pip install -r requirements.txt --break-system-packages
+```
+
+### 3. Load the law corpus into MongoDB (one-time)
+Embeds the 272 parsed law chunks and creates the Atlas Vector Search index
+that hybrid retrieval actually queries at runtime:
+```bash
+python pipeline/load_to_mongo.py
+```
+Index build can take a minute or two on Atlas; the script waits until it's
+queryable before exiting.
+
+### 4. Start the backend
+```bash
+python app.py
+```
+The API is served at http://localhost:5001. The first request is slow since
+the embedding/reranker models load lazily on first use.
+
+### 5. Open the UI
+The Next.js frontend (Stage 7) hasn't been built yet -- right now the only
+working UI is a self-contained static HTML/JS page,
+[`frontend/prototype.html`](frontend/prototype.html), that talks directly to
+the API above:
+```bash
+open frontend/prototype.html   # or just double-click it in Finder
 ```
 
 ## Evaluation Results

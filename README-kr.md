@@ -22,6 +22,12 @@ RAG 기반 병역 행정절차 안내 챗봇입니다.
 - [데이터 출처](#데이터-출처)
 - [프로젝트 구조](#프로젝트-구조)
 - [시작하기](#시작하기)
+  - [사전 준비](#사전-준비)
+  - [1. 환경변수 설정](#1-환경변수-설정)
+  - [2. 의존성 설치](#2-의존성-설치)
+  - [3. 법령 코퍼스를 MongoDB에 적재 (최초 1회)](#3-법령-코퍼스를-mongodb에-적재-최초-1회)
+  - [4. 백엔드 실행](#4-백엔드-실행)
+  - [5. UI 열기](#5-ui-열기)
 - [평가 결과](#평가-결과)
 - [개발자 노트](#개발자-노트)
 - [License](#license)
@@ -101,24 +107,53 @@ backend/
 ├── db/                 # MongoDB 연결
 └── evaluation/         # RAGAS 기반 정량 평가
 
-frontend/               # Next.js 앱 (챗 UI, 프로필, 영한 토글)
+frontend/               # prototype.html(현재 동작하는 UI) + Next.js 앱 스캐폴딩(7단계, 미구현)
 scripts/                # DB 세팅 및 파이프라인 실행 스크립트
 docs/                   # 아키텍처 설명, 평가 결과 정리
 ```
 
 ## 시작하기
 
-```bash
-# 백엔드
-cd backend
-pip install -r requirements.txt --break-system-packages
-cp .env.example .env   # GOOGLE_API_KEY, MONGO_URI 입력
-python app.py
+### 사전 준비
+- Python 3.12+
+- [MongoDB Atlas](https://www.mongodb.com/atlas) 클러스터 (무료 M0 티어로 충분 —
+  Atlas Vector Search도 무료 티어에서 사용 가능) + 연결 문자열
+- [Google AI Studio](https://aistudio.google.com/apikey) API 키 (무료 티어,
+  카드 등록 불필요)
 
-# 프론트엔드
-cd frontend
-npm install
-npm run dev
+### 1. 환경변수 설정
+```bash
+cd backend
+cp .env.example .env   # GOOGLE_API_KEY, MONGO_URI 입력
+```
+
+### 2. 의존성 설치
+```bash
+pip install -r requirements.txt --break-system-packages
+```
+
+### 3. 법령 코퍼스를 MongoDB에 적재 (최초 1회)
+파싱된 법령 청크 272개를 임베딩하고, 하이브리드 검색이 실제로 사용하는 Atlas
+Vector Search 인덱스까지 생성합니다:
+```bash
+python pipeline/load_to_mongo.py
+```
+Atlas에서 인덱스가 빌드되는 데 1~2분 걸릴 수 있고, 스크립트가 쿼리 가능
+상태가 될 때까지 알아서 대기합니다.
+
+### 4. 백엔드 실행
+```bash
+python app.py
+```
+API는 http://localhost:5001 에서 서비스됩니다. 첫 요청은 임베딩/리랭커
+모델이 그때 처음 로드되기 때문에 느립니다.
+
+### 5. UI 열기
+Next.js 프론트엔드(7단계)는 아직 구현 전입니다 — 지금 실제로 동작하는
+화면은 위 API에 직접 요청을 보내는 정적 HTML/JS 페이지
+[`frontend/prototype.html`](frontend/prototype.html) 하나뿐입니다:
+```bash
+open frontend/prototype.html   # 또는 Finder에서 더블클릭
 ```
 
 ## 평가 결과
