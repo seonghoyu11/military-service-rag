@@ -1,4 +1,4 @@
-# Military Service RAG Chatbot for Overseas Conscripts
+# DutyCompass - Military Service RAG Chatbot for Overseas Conscripts
 
 > **한국인들을 위한 알림**:
 > 한국어로 된 README는 [README-kr.md](README-kr.md)를 참고하십시오.

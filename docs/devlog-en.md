@@ -1,4 +1,4 @@
-# Developer Notes: RAG Chatbot for Overseas Korean Military Service Obligors
+# DutyCompass - Developer Notes: RAG Chatbot for Overseas Korean Military Service Obligors
 
 A RAG-based chatbot guiding overseas military-service obligors — permanent
 residents, international students, dual nationals, second-generation

@@ -1,4 +1,4 @@
-# Architecture & Progress
+# DutyCompass - Architecture & Progress
 
 ## Table of Contents
 

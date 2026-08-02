@@ -1,4 +1,4 @@
-# Evaluation Results
+# DutyCompass - Evaluation Results
 
 ## Table of Contents
 

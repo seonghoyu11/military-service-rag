@@ -1,4 +1,4 @@
-# 해외체류 병역의무자 안내 챗봇 (Military Service RAG Chatbot)
+# DutyCompass - 해외체류 병역의무자 안내 챗봇 (Military Service RAG Chatbot)
 
 > **For English Speakers**:
 > Please refer to [README.md](README.md) for English Information
