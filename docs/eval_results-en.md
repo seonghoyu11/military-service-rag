@@ -1446,3 +1446,147 @@ fixes (separated judge model, serialized RunConfig) are in place and unchanged, 
 `gemini-3.6-flash`'s quota resets (some day after today), re-running
 `python3 evaluation/ragas_eval.py` as-is (no model patch) will produce numbers against the
 actual production model.
+
+## Stage 5 default-model lite switch attempt and rollback (2026-08-03)
+
+### Background
+
+Live measurement from the Google AI Studio console (2026-08-01, checked via
+screenshot) showed RPD isn't uniform across the 6 whitelisted models:
+
+| Model | RPM | RPD |
+|---|---|---|
+| gemini-3.6-flash (DEFAULT_MODEL at the time) | 5 | 20 (already exceeded once, 24/20) |
+| gemini-3.5-flash | 5 | 20 |
+| gemini-2.5-flash | 5 | 20 |
+| gemini-3.5-flash-lite | 15 | 500 |
+| gemini-3.1-flash-lite | 15 | 500 |
+
+The three "Flash" models (3.6/3.5/2.5) are all capped at 20 RPD, while only
+the "Flash Lite" models get 500 -- it's the lite/non-lite split that
+determines quota size, not generation age. RPD 20 leaves a real risk of
+running out mid-demo (a judge asking more than 20 questions is a plausible
+scenario) and silently failing with `answer: null` + `answer_error`. So
+`DEFAULT_MODEL` was switched to `gemini-3.5-flash-lite` to try for the
+larger headroom.
+
+### Regression check after the switch -- retrieval logic unaffected
+
+Clean restart (`pkill -9 -f "app.py"` -> relaunch, hash=2dc6d7a4/270 chunks
+confirmed identical to before) then re-ran the 3 anchor queries over real
+HTTP -- retrieval ranking scores matched the prior record exactly (expected,
+since the model swap only touches the generation stage and retrieval logic
+was untouched, but worth confirming it held in practice):
+
+| Question | top1 | Prior record | This run |
+|---|---|---|---|
+| Studying abroad, would a leave of absence cancel my enlistment deferral | Art. 27(3) | 0.5618 | 0.5618 ✅ |
+| Would a part-time job be a problem | Art. 22 | 0.3002 | 0.3002 ✅ |
+| Permanent resident, how long can I put off enlistment | Attached Table 3 | 0.3092 | 0.3092 ✅ |
+
+All 3 had `answer_error: null` with a populated `answer` field -- confirmed
+the lite model does generate real answers.
+
+### A refusal pattern found in the faithfulness spot check (a lite-model defect)
+
+Re-ran the same 5 questions as the 2026-07-31 spot check with the lite model,
+comparing against that day's `gemini-3.6-flash` baseline:
+
+| # | Question | top1 retrieval score | 3.6-flash (baseline) | 3.5-flash-lite (today) |
+|---|---|---|---|---|
+| 1 | Studying abroad, would a leave of absence cancel my enlistment deferral | 0.5618 | Detailed 2-paragraph answer citing Art. 27(3) and Art. 125(2) | "Cannot be determined from the provided articles" -- zero citations |
+| 2 | Permanent resident, how long can I put off enlistment | 0.3092 | 3 citations: Attached Table 3, Art. 149, Art. 128 | Cites Attached Table 3 and Art. 149, solid |
+| 3 | I'm a social service agent, can I travel abroad | **0.9882** | 5 citations: Art. 135(8), Attached Table 3 x4 | "Cannot be determined from the provided articles" -- zero citations |
+| 4 | My dad is a posted employee abroad, does that defer my service too | 0.3586 | 4 citations incl. the Attached-Table-3 posted-employee exception, Art. 149, Art. 128, Art. 60 | Correctly captures the posted-employee exception, cites Art. 149, solid |
+| 5 | I have dual citizenship, is getting a job in Korea a problem | 0.0007 | `low_confidence: true`, generation skipped | Same |
+
+For #1 and #3, the retrieved results clearly contained the correct article
+(#3 especially, with a top1 score of 0.9882 -- about as unambiguous as this
+corpus gets), yet the lite model cited none of it and returned a refusal
+("cannot be determined") instead. Not hallucination -- the opposite failure,
+ignoring evidence that was clearly present -- but either way it fails this
+project's core promise of grounded, cited answers. #2 and #4 matched the
+baseline's quality, so the lite model isn't uniformly worse -- it varies
+sharply by question pattern.
+
+**Reproducibility check**: retried #1 and #3 twice more each (3/3 total per
+question) -- every retry produced the same zero-citation refusal. Not
+sampling noise; a close-to-deterministic failure mode.
+
+### Rollback decision
+
+Not hallucination, but per the previously agreed principle that answer
+accuracy outranks quota headroom, decided to roll back to
+`gemini-3.6-flash`. Reverted `DEFAULT_MODEL` in
+`generation/gemini_client.py`, clean-restarted, and re-verified #1 and #3
+with 3.6-flash:
+
+| # | Question | After the 3.6-flash rollback |
+|---|---|---|
+| 1 | Studying abroad, would a leave of absence cancel my enlistment deferral | Citations restored: Art. 27(3) (0.5618), Art. 125(2) |
+| 3 | I'm a social service agent, can I travel abroad | Citations restored: Art. 135(8) (0.9882), Attached Table 3 (all 4 items incl. the posted-employee exception) -- matches baseline quality |
+
+Both questions were fully restored to baseline-level citation accuracy.
+`DEFAULT_MODEL` stays on `gemini-3.6-flash`; the RPD-20 constraint (and the
+real risk of running out mid-demo) is an accepted, known risk for now --
+worth a separate discussion about demo-operation mitigations (capping
+question count, a rehearsed run, etc.) if needed.
+
+### RAGAS re-run for real (against the actual production model, no patch)
+
+The 2026-07-31 run's numbers came from `unittest.mock.patch`-ing the
+generation model to `gemini-3.5-flash-lite` for that run only, because
+`gemini-3.6-flash`'s quota was already exhausted that day (see "Today-only
+workaround" in the Stage 6 section above). This time, with quota reset,
+`python3 evaluation/ragas_eval.py` was re-run **with no patch, against the
+actually-deployed `gemini-3.6-flash`**.
+
+`_run_pipeline`: 6 of 8 questions produced an answer, 2 skipped on
+`low_confidence=True` (same skip pattern as 2026-07-31, reproducibility
+confirmed). Retrieval margin scores matched the prior record exactly across
+all 8 questions -- no regression.
+
+**Reference-free (6 questions, faithfulness + answer_relevancy):**
+
+| Metric | 2026-07-31 (substituted lite generation) | Today (real 3.6-flash) |
+|---|---|---|
+| faithfulness | 0.2778 | **0.8783** |
+| answer_relevancy | 0.2670 | 0.3436 |
+
+Faithfulness jumped from 0.28 to 0.88. This confirms hypothesis (b) already
+floated in the 2026-07-31 write-up -- "the lite generation model's answers
+may genuinely have been less well-grounded than the 3.6-flash answers
+spot-checked the day before." Having now directly watched the lite model
+refuse to cite on-topic evidence for #1 and #3 in this session, it's now
+reasonably certain the 07-31 low faithfulness score was a real defect in the
+lite generation model, not the pipeline or the judge prompt. 0.88 also lines
+up directionally with the 2026-07-31 manual spot check (5/5 citations
+accurate, on 3.6-flash).
+
+**Reference-based (4 ground_truth-labeled questions, context_precision + context_recall):**
+
+| Metric | Score |
+|---|---|
+| context_precision (LLMContextPrecisionWithReference) | NaN -- 4 of 8 jobs timed out again, same failure shape as 2026-07-31, but quota (429) played no role this time (zero 429/quota lines anywhere in stderr) -- looks like the client-side timeout is shorter than the judge's actual 2-3 min response time. Needs separate investigation |
+| context_recall | 0.7917 |
+
+context_recall matches 2026-07-31's 0.7917 exactly, as expected since
+ground_truth itself is unchanged (the circularity caveat from that section
+still applies today). context_precision failed to score again (NaN) --
+retrying just that metric with a longer `RunConfig` timeout is a follow-up
+item.
+
+**429 errors**: zero 429/quota-related lines anywhere in stderr. Today's
+total `gemini-3.6-flash` calls -- 2 rollback-verification calls + 6 RAGAS
+pipeline generation calls = 8 -- finished comfortably inside the 20 RPD cap
+(judge calls run on the lite model's separate 500 RPD bucket, so they were
+never a factor).
+
+### Conclusion
+
+The lite switch ended in a rollback, but it incidentally settled something
+important: 2026-07-31's low faithfulness (0.28) wasn't a pipeline or judge-prompt
+defect -- it was caused by that day's temporary lite substitution itself.
+Today's real-3.6-flash number (faithfulness 0.88) backs that up.
+`DEFAULT_MODEL` stays on `gemini-3.6-flash`, the RPD-20 risk is accepted, and
+the context_precision timeout remains an open item.

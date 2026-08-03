@@ -61,6 +61,13 @@ EVAL_SET_PATH = os.path.join(
 # at 20 requests/DAY for this account (not the ~1000-1500/day assumed at design
 # time), and the 8-question generation pass alone was enough to leave no
 # headroom for the ~12-20 judge calls RAGAS needs on top of that.
+#
+# (2026-08-01 briefly moved DEFAULT_MODEL to gemini-3.5-flash-lite too, which
+# would have put generation and judge calls in the same 500 RPD bucket -- but
+# that switch was reverted 2026-08-03 after a faithfulness spot check found
+# the lite model unreliably ignored well-matched retrieved context on some
+# questions. DEFAULT_MODEL is back to gemini-3.6-flash, so this is a genuinely
+# separate quota bucket from JUDGE_MODEL again.)
 JUDGE_MODEL = "gemini-3.5-flash-lite"
 
 # RAGAS defaults to max_workers=16 / max_retries=10, which fires way more

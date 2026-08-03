@@ -35,11 +35,30 @@ ALLOWED_MODELS = {
 # gemini-2.0-flash returns 429 with a hard 0 free-tier quota -- both are
 # effectively dead for this account despite being nominally free-tier models.
 # gemini-3.5-flash (non-lite) consistently returned 503 "high demand" across
-# repeated retries, so it isn't used as the default either even though it's
-# in the whitelist. gemini-3.6-flash, gemini-3.5-flash-lite, and
-# gemini-3.1-flash-lite all responded successfully in that same test --
-# gemini-3.6-flash is the newest/most capable of the three that actually
-# work, so it's the default.
+# repeated retries. gemini-3.6-flash, gemini-3.5-flash-lite, and
+# gemini-3.1-flash-lite all responded successfully in that same test.
+#
+# UPDATE 2026-08-01: Google AI Studio's rate-limit console shows RPD (requests
+# per day) is NOT uniform across the whitelist -- the three "Flash" models
+# (3.6-flash, 3.5-flash, 2.5-flash) are all capped at 20 RPD, while the two
+# "Flash Lite" models are capped at 500 RPD (25x higher), with RPM also 3x
+# higher (15 vs 5). gemini-3.6-flash's RPD was hit and exceeded (24/20) during
+# a single day of Stage 5/6 development + testing -- nowhere near what a live
+# demo with an unpredictable number of questions could safely assume. Briefly
+# switched the default to gemini-3.5-flash-lite for the larger daily headroom.
+#
+# UPDATE 2026-08-03: reverted back to gemini-3.6-flash. The lite switch was
+# tested with a 5-question faithfulness spot check (same questions as the
+# 2026-07-31 baseline) and reproduced a deterministic failure mode: for 2 of
+# 5 questions (including one where the top retrieved chunk scored 0.9882 --
+# about as unambiguous as this corpus gets), gemini-3.5-flash-lite ignored
+# the retrieved context entirely and returned a bare "제공된 조항만으로는
+# 판단하기 어렵습니다" with zero citations, 3/3 times on retry (not sampling
+# noise). Not hallucination -- the opposite failure, refusing to cite
+# evidence that was clearly present -- but it guts this project's core
+# promise of grounded, cited answers just as badly. Answer accuracy takes
+# priority over quota headroom at this stage, so RPD 20/day (and the real
+# risk of exhausting it mid-demo) is the accepted tradeoff for now.
 DEFAULT_MODEL = "gemini-3.6-flash"
 
 # Free-tier rate limits vary by model (roughly 10-15 requests/min, 1,000-1,500

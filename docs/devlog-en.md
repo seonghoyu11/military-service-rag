@@ -375,6 +375,39 @@ context_recall 0.7917, context_precision NaN from timeouts) aren't settled
 quality metrics yet, given all that -- see the two "Stage 6" sections in
 `docs/eval_results-en.md` for the full caveats and how to re-run cleanly.
 
+## Stage 5 default-model lite switch attempt and rollback (2026-08-03)
+
+Live numbers from the Google AI Studio console showed RPD wasn't uniform
+across the 6 whitelisted models -- the three "Flash" models
+(3.6/3.5/2.5-flash) were all capped at 20 RPD, while only the "Flash Lite"
+models (3.5/3.1-flash-lite) got 500. The then-default `gemini-3.6-flash` had
+already burned through its daily 20 once, so `DEFAULT_MODEL` was switched to
+`gemini-3.5-flash-lite` to cut the risk of running out mid-demo.
+
+Re-running the same 5 questions from the 2026-07-31 faithfulness spot check
+after the switch turned up a problem: for 2 of 5 (a leave-of-absence
+question and a social-service-agent travel question), the retrieved results
+clearly contained the right article -- the latter with a top1 score of
+0.9882 -- yet the lite model cited none of it, returning only "cannot be
+determined from the provided articles." Retried both questions twice more
+each to check for reproducibility: 3/3 identical every time -- not sampling
+noise, a real defect in the lite model. Not hallucination (it ignored
+evidence rather than inventing it), but it broke the "accurately cited
+articles" core promise just as badly, so rolled back to
+`gemini-3.6-flash`. Re-verifying the same two questions after the rollback
+showed citations fully restored to baseline quality.
+
+With quota freshly reset, also re-ran RAGAS with no model patch this time --
+against the real `gemini-3.6-flash`. Faithfulness jumped from 07-31's 0.2778
+to **0.8783**, backing up the hypothesis floated that day: the low score
+wasn't a pipeline defect, it was the temporarily-substituted lite generation
+model itself. context_precision again failed to score (NaN, timeouts), but
+there were zero 429/quota errors -- today's 8 total `gemini-3.6-flash` calls
+(2 rollback-verification + 6 RAGAS generation) stayed comfortably inside the
+20 RPD cap. `DEFAULT_MODEL` stays on `gemini-3.6-flash`; the RPD-20 risk is
+accepted knowingly. Full tables and logs are in the new section of
+`docs/eval_results-en.md`.
+
 ## Progress summary
 
 Stages 1-6 are all done. See each stage's section above and
