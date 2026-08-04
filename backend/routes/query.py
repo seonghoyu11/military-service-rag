@@ -7,6 +7,7 @@ from flask import Blueprint, request, jsonify
 from classifier.predict import classify
 from db.mongo import get_db
 from generation.answer import generate_answer
+from generation.citation_parser import parse_citations
 from retrieval import bm25_search, hybrid, reranker
 
 query_bp = Blueprint("query", __name__)
@@ -211,6 +212,15 @@ def answer_question(question, session_user_type=None):
             print(f"[answer_error] query={question!r} error={e!r}", file=sys.stderr)
             answer_error = f"{type(e).__name__}: {e}"
 
+    # Structured form of `answer` for the frontend's clickable citation
+    # chips (chip click -> scroll/highlight the matching card in `results`).
+    # Parsed here, not on the frontend, since the law_name/article_no
+    # matching needs `results` -- which already lives in this function --
+    # and keeps any future citation-format changes (e.g. the 별표 special
+    # case) in one place instead of two. `answer` is left untouched for
+    # debugging/logging; this is purely additive.
+    answer_segments = parse_citations(answer, results) if answer else None
+
     return {
         "out_of_scope": False,
         "intent": intent,
@@ -219,6 +229,7 @@ def answer_question(question, session_user_type=None):
         "low_confidence": low_confidence,
         "low_confidence_notice": LOW_CONFIDENCE_NOTICE if low_confidence else None,
         "answer": answer,
+        "answer_segments": answer_segments,
         "answer_error": answer_error,
     }
 

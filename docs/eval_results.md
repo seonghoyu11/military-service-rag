@@ -18,6 +18,9 @@
 - [Stage 5: Gemini Flash 답변 생성 검증 (2026-07-31)](#stage-5-gemini-flash-답변-생성-검증-2026-07-31)
 - [Stage 6: Flask API 정식화 — 세션 프로필 + 피드백 (2026-08-01)](#stage-6-flask-api-정식화--세션-프로필--피드백-2026-08-01)
 - [Stage 6 마지막 조각: RAGAS 정량 평가 (2026-08-01)](#stage-6-마지막-조각-ragas-정량-평가-2026-08-01)
+- [Stage 5 기본 모델 lite 전환 시도와 롤백 (2026-08-03)](#stage-5-기본-모델-lite-전환-시도와-롤백-2026-08-03)
+- [context_precision NaN 원인 규명 및 수정 (2026-08-03, 후속)](#context_precision-nan-원인-규명-및-수정-2026-08-03-후속)
+- [`answer_segments` 필드 신설 — citation 파싱 (2026-08-03)](#answer_segments-필드-신설--citation-파싱-2026-08-03)
 
 ## 1단계: 데이터 파싱 검증 (2026-07-09)
 
@@ -1370,3 +1373,148 @@ lite 전환 시도는 롤백으로 마무리됐지만 부수적으로 중요한 
 3.6-flash 기준 수치(faithfulness 0.88)가 그걸 뒷받침한다. `DEFAULT_MODEL`은
 `gemini-3.6-flash`로 유지, RPD 20 리스크는 감수, context_precision 타임아웃은
 미해결 과제로 남았다.
+
+## context_precision NaN 원인 규명 및 수정 (2026-08-03, 후속)
+
+### 원인
+
+7/31·8/3 두 세션 모두 `LLMContextPrecisionWithReference`가 NaN이었다. 8/3
+세션에서 stderr에 429/quota 관련 로그가 0건이었던 것으로 미뤄, quota
+소진이 원인이 아니라는 건 이미 좁혀져 있었다. `run_reference_free()`
+(Faithfulness/ResponseRelevancy)는 같은 judge(`gemini-3.5-flash-lite`)로
+매번 정상 채점됐으니 judge나 API 키 문제도 아니었다.
+
+실측해보니 judge 응답 자체가 건당 2~3분 걸리는데, RAGAS의 `RunConfig`
+기본 `timeout`이 **180초**였다(`RunConfig()` 기본값 직접 확인). judge
+응답 시간이 타임아웃 근처거나 이를 넘기는 경우가 많아서 job이 끝까지 못
+가고 클라이언트 타임아웃으로 끊긴 것으로 결론지었다.
+
+### 수정
+
+`backend/evaluation/ragas_eval.py`의 `JUDGE_RUN_CONFIG`
+(`run_reference_free()`, `run_reference_based()` 둘 다 공유)에
+`timeout=300`을 명시적으로 추가:
+
+```python
+JUDGE_RUN_CONFIG = RunConfig(max_workers=1, max_retries=1, timeout=300)
+```
+
+### 검증 실행 결과
+
+`python3 evaluation/ragas_eval.py` 재실행(model patch 없음, 8문항 세트
+그대로, ground_truth 4문항 기준 동일):
+
+| 메트릭 | 8/3 오전 (수정 전) | 8/3 저녁 (수정 후) |
+|---|---|---|
+| faithfulness | 0.8783 | 0.9111 |
+| answer_relevancy | 0.3436 | 0.2746 |
+| context_precision (LLMContextPrecisionWithReference) | NaN | **0.6181** |
+| context_recall | 0.7917 | 0.7500 |
+
+**context_precision이 이번엔 NaN 없이 실제 숫자(0.6181)로 나왔다** — 0~1
+범위 안이고, 같은 4문항 기준 context_recall(0.7500)과 비슷한 대역이라
+그럴듯한 값으로 보인다. stderr 전체에서 429/quota 관련 로그도 0건 —
+`timeout=300` 수정이 문제를 해결했다고 판단한다.
+
+다만 faithfulness/answer_relevancy/context_recall도 수정 전후로 값이
+꽤 흔들렸다(0.88→0.91, 0.34→0.27, 0.79→0.75) — 코드는 이 사이에 안 바꿨고
+같은 질문·같은 ground_truth로 돌린 거라, 이건 LLM judge 자체의 실행 간
+변동성(non-determinism)으로 보는 게 맞다. 즉 이번 한 번의 성공적인
+context_precision 채점만으로 "매번 안정적으로 성공한다"고 단정하지는
+않는다 — 다음에 또 NaN이 나올 수 있다는 전제로 지켜볼 필요가 있다.
+
+**특이사항 하나 기록**: reference-based 8개 job 중 7번째(8개 중 인덱스
+7)가 누적 시간 기준 18분 20초 → 1시간 14분 18초로, 단일 job에 약 56분이
+걸렸다. 에러나 재시도 로그는 안 남았고 결국 성공은 했지만, 정상적인
+judge 응답 시간(2~3분)보다 훨씬 길다. 원인은 특정하지 못했다(로컬 머신의
+일시적 리소스 경합/네트워크 지연일 가능성이 있으나 로그로 확인 불가) —
+`timeout=300`을 다시 늘려야 할 만큼 재발하는 별도 이슈는 아니지만, 이
+수정이 "느린 job도 무조건 5분 안에 끝난다"를 보장하는 건 아니라는 뜻이라
+같이 적어둔다.
+
+### 결론
+
+context_precision NaN의 원인은 429가 아니라 RAGAS `RunConfig`의 기본
+타임아웃(180초)이 실측 judge 응답 시간(2~3분)보다 짧았던 것이었고,
+`timeout=300`으로 늘려서 이번 실행은 정상 채점(0.6181)됐다. 다만 (1)
+다른 3개 메트릭도 실행마다 꽤 흔들린다는 점, (2) 이번에도 job 하나가
+비정상적으로 오래 걸렸다는 점 때문에, "완전히 해결됨"이 아니라 "이번엔
+성공했고 원인도 설명됨" 정도로 정리한다. 여러 번 더 돌려서 재현율을
+확인하는 게 다음 과제.
+
+## `answer_segments` 필드 신설 — citation 파싱 (2026-08-03)
+
+### 배경
+
+7단계(Next.js 프론트) 착수 전 마지막 백엔드 블로커였다. 새 프론트 디자인은
+답변 안의 citation("제27조③" 등)을 클릭하면 해당 근거 카드로 스크롤+하이라이트
+하는 UI를 전제로 하는데, `generate_answer()`는 지금까지 평문 문자열만
+반환했다. `answer_question()`(`routes/query.py`)에 새 필드 `answer_segments`를
+추가해서, `{type: "text"|"citation", ...}` 구조로 answer를 쪼갠 리스트를
+반환하게 했다. 기존 `answer` 필드는 그대로 유지(디버깅/로그용) — 완전히
+추가적인 변경이라 하위호환 깨지지 않음.
+
+파싱은 백엔드에서 한다(프론트 아님) — `results` 배열(법령명/조번호/항번호)이
+이미 백엔드에 있어서 매칭 로직도 여기 있는 게 자연스럽고, citation 포맷이
+나중에 바뀌어도 프론트를 안 건드려도 된다.
+
+### 설계: 결과에 이미 있는 실제 `law_name` 문자열로 정규식을 만든다
+
+처음 제안됐던 설계는 `[\w가-힣]+(?:법|규정|훈령)` 같은 범용 문자 클래스
+정규식으로 법령명을 인식하려 했는데, 실제로 구현해보니 이 코퍼스의 법령명
+일부(`병역의무자 국외여행 업무처리 규정`)는 "규정" 접미사 바로 앞에
+공백이 있어서 이 패턴이 매칭 자체를 실패한다는 걸 발견했다(범용 패턴은
+법령명 어간과 접미사가 공백 없이 붙어있다고 가정하는데, 실제 데이터는
+그렇지 않음). 그래서 `generation/citation_parser.py`는 대신 `results`에
+이미 있는 정확한 `law_name` 문자열들로 정규식을 동적으로 구성한다 — 이
+접근은 공백 버그를 원천 차단하고, 별표(table) 케이스도 별도 패턴 없이
+통합 처리된다: `_format_articles()`(`answer.py`)를 보면 별표 청크의
+`law_name` 필드 자체가 이미 "병역법 시행령 별표 3"처럼 "별표 N"까지
+포함하고 있어서, Gemini가 그대로 베껴 쓰기 때문이다.
+
+이 설계는 "Gemini가 `results`의 `law_name`을 있는 그대로 인용에 재사용한다"는
+전제에 기대고 있다 — `SYSTEM_INSTRUCTION`은 인용 *형식*만 지정하지 정확히
+이 문자열을 그대로 쓰라고 강제하지는 않는다. 지금까지 확인한 모든 fixture에서
+경험적으로는 항상 그대로 재사용됐지만, 이론적 보장은 아니다(코드 주석에도
+명시). 만약 나중에 어떤 법령이 다르게 표현되어 인용되면, 그 citation은
+크래시 없이 그냥 일반 text 세그먼트로 남을 뿐이다.
+
+### 테스트: 실제 fixture 2개, 내용까지 비교 검증
+
+`backend/tests/test_citation_parser.py` + `backend/tests/fixtures/` — 8/3
+클린 재시작된 서버에 실제 `/api/query`를 호출해서 그 응답 그대로 저장한
+fixture 2개를 사용(손으로 옮겨 적지 않고 그대로 캡처):
+
+**케이스 1** (`사회복무요원인데 해외 갈 수 있나요`): 답변이 별표3을 **4번
+서로 다른 조건으로 인용**하는데, `results`에서 이 4개 별표3 항목은
+`(law_name, article_no, paragraph_no)`가 전부 동일하고 `text`(실제 행
+내용)만 다르다 — 정규식 기반 매칭이 이 4개를 구분할 방법이 없다는 뜻.
+`_find_result_index()`는 이 경우 "이번 답변에서 아직 안 쓰인 첫 번째
+후보"로 폴백한다 — 순서 기반이라 LLM의 인용 순서가 대략 `results` 순서를
+따른다는 가정에 기댄다. 이 fixture에서는 **실제로 맞았다**: 5개 citation이
+`result_index` 0, 1, 2, 3, 4로 정확히 순서대로 배정됐고, 테스트는 이걸
+"result_index가 null이 아니다"로만 확인한 게 아니라 각 citation 뒤에
+이어지는 텍스트 내용(예: "해외이주신고를 한 사람"→3년, "5년 이상
+거주"→주재원 예외, "조건부 또는 임시영주권"→6개월)이 매칭된
+`results[i]["text"]`와 실제로 일치하는지까지 확인했다.
+
+**이건 known limitation이지 완전한 해결이 아니다** — 내용 기반 매칭이
+아니라 순서 기반 폴백이라서, 답변의 인용 순서가 `results` 순서와 어긋나는
+경우(이론상 가능, 이번 fixture에선 안 일어남)엔 틀린 매칭이 나올 수 있다.
+`citation_parser.py`의 `_find_result_index()` 독스트링에 이 한계와, 필요하면
+다음에 시도할 개선안(인용 뒤 문장의 단어와 각 후보 `text`의 내용 중복도
+비교하는 휴리스틱)을 남겨뒀다 — 아직 구현은 안 함.
+
+**케이스 2** (`유학 중인데 휴학하면 입영연기가 취소되나요`): 서로 다른
+법령명 2개 인용, 그중 하나가 위에서 발견한 공백 버그 케이스("병역의무자
+국외여행 업무처리 규정 제27조 제3항에 따르면") — 이 케이스가 실제로
+정상 매칭되는지 확인하는 회귀 테스트. `pytest`로 5개 테스트 전부 통과.
+
+### 실제 서버 통합 검증
+
+클린 재시작(Flask 디버그 리로더가 `routes/query.py` 변경을 감지해 자동
+재시작, `pkill` 수동 재시작과 동일하게 hash=2dc6d7a4/270 chunks 이전과
+일치 확인) 후 위 두 질문을 실제 `/api/query`로 다시 호출 — `answer_segments`가
+실제 파이프라인 전체(검색→생성→파싱)를 거쳐서도 정상적으로 채워지는 걸
+확인했다(이 두 응답이 그대로 위 fixture가 됨 — 유닛테스트와 통합 검증을
+같은 호출로 겸함).

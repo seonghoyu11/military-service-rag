@@ -18,6 +18,9 @@
 - [Stage 5: Gemini Flash answer-generation verification (2026-07-31)](#stage-5-gemini-flash-answer-generation-verification-2026-07-31)
 - [Stage 6: formalizing the Flask API -- session profile + feedback (2026-08-01)](#stage-6-formalizing-the-flask-api----session-profile--feedback-2026-08-01)
 - [Stage 6's last piece: RAGAS quantitative evaluation (2026-08-01)](#stage-6s-last-piece-ragas-quantitative-evaluation-2026-08-01)
+- [Stage 5 default-model lite switch attempt and rollback (2026-08-03)](#stage-5-default-model-lite-switch-attempt-and-rollback-2026-08-03)
+- [Root-causing and fixing the context_precision NaN (2026-08-03, follow-up)](#root-causing-and-fixing-the-context_precision-nan-2026-08-03-follow-up)
+- [New `answer_segments` field -- citation parsing (2026-08-03)](#new-answer_segments-field----citation-parsing-2026-08-03)
 
 ## Stage 1: Data parsing validation (2026-07-09)
 
@@ -1590,3 +1593,162 @@ defect -- it was caused by that day's temporary lite substitution itself.
 Today's real-3.6-flash number (faithfulness 0.88) backs that up.
 `DEFAULT_MODEL` stays on `gemini-3.6-flash`, the RPD-20 risk is accepted, and
 the context_precision timeout remains an open item.
+
+## Root-causing and fixing the context_precision NaN (2026-08-03, follow-up)
+
+### Root cause
+
+`LLMContextPrecisionWithReference` came back NaN on both the 2026-07-31 and
+2026-08-03 sessions. Zero 429/quota lines in stderr on the 8/3 run had
+already ruled out quota exhaustion. `run_reference_free()`
+(Faithfulness/ResponseRelevancy) scored fine every time on the same judge
+(`gemini-3.5-flash-lite`), which ruled out the judge or the API key too.
+
+Measuring it directly: real judge round-trips take 2-3 minutes per call, but
+RAGAS's `RunConfig` default `timeout` turned out to be **180 seconds**
+(confirmed directly against `RunConfig()`'s default). Judge responses were
+landing right at or past that timeout often enough that jobs were getting
+cut off client-side before finishing.
+
+### Fix
+
+Added an explicit `timeout=300` to `JUDGE_RUN_CONFIG` in
+`backend/evaluation/ragas_eval.py` (shared by both `run_reference_free()`
+and `run_reference_based()`):
+
+```python
+JUDGE_RUN_CONFIG = RunConfig(max_workers=1, max_retries=1, timeout=300)
+```
+
+### Verification run
+
+Re-ran `python3 evaluation/ragas_eval.py` (no model patch, same 8-question
+set, same 4 ground_truth-labeled questions):
+
+| Metric | 8/3 morning (before fix) | 8/3 evening (after fix) |
+|---|---|---|
+| faithfulness | 0.8783 | 0.9111 |
+| answer_relevancy | 0.3436 | 0.2746 |
+| context_precision (LLMContextPrecisionWithReference) | NaN | **0.6181** |
+| context_recall | 0.7917 | 0.7500 |
+
+**context_precision came back as a real number (0.6181) this time, not
+NaN** -- within [0, 1] and in a similar range to context_recall (0.7500) on
+the same 4 questions, so it looks like a plausible score. Zero 429/quota
+lines in stderr again. The `timeout=300` fix appears to have resolved the
+issue.
+
+That said, faithfulness/answer_relevancy/context_recall also moved
+noticeably between the two runs (0.88->0.91, 0.34->0.27, 0.79->0.75) even
+though nothing in the code changed between them and both ran the same
+questions against the same ground_truth -- that's read as normal run-to-run
+non-determinism in the LLM judge, not a regression. So this one successful
+context_precision score isn't being treated as proof it'll succeed every
+time going forward -- worth watching for a NaN recurrence on a future run.
+
+**One anomaly worth recording**: of the 8 reference-based jobs, the 7th
+(index 7 of 8) took roughly 56 minutes on its own -- cumulative time jumped
+from 18m20s (after job 6) to 1h14m18s (after job 7). No error or retry was
+logged, and it eventually succeeded, but that's far longer than the normal
+2-3 minute judge round-trip. The cause wasn't pinned down (possibly local
+machine resource contention or a network stall, but nothing in the logs
+confirms it) -- not a big enough recurring issue to bump `timeout=300`
+further, but it does mean this fix doesn't guarantee every job finishes
+within 5 minutes, worth noting alongside the fix.
+
+### Conclusion
+
+The context_precision NaN wasn't caused by 429s -- it was RAGAS's
+`RunConfig` default timeout (180s) being shorter than the judge's real
+response time (2-3 min). Bumping it to `timeout=300` got a real score
+(0.6181) on this run. Given (1) the other three metrics also swung
+noticeably run-to-run and (2) one job still took unusually long this time
+too, this is better described as "worked this time, and the cause is now
+understood" rather than "fully solved." Running it a few more times to
+confirm the fix holds is the next step.
+
+## New `answer_segments` field -- citation parsing (2026-08-03)
+
+### Background
+
+The last backend blocker before starting Stage 7 (the Next.js frontend). The
+new frontend design assumes an answer's citations (e.g. "Art. 27(3)") are
+clickable chips that scroll to and highlight the matching evidence card, but
+`generate_answer()` only ever returned plain text. Added a new
+`answer_segments` field to `answer_question()` (`routes/query.py`) that
+splits the answer into a `{type: "text"|"citation", ...}` segment list. The
+existing `answer` field is untouched (kept for debugging/logs) -- this is
+purely additive, no backward-compat break.
+
+Parsing happens on the backend, not the frontend -- the `results` list
+(law_name/article_no/paragraph_no) already lives there, so the matching
+logic belongs there too, and any future citation-format change won't
+require touching the frontend.
+
+### Design: build the regex from the literal `law_name` strings already in `results`
+
+The originally proposed design tried to recognize law names with a generic
+character-class regex like `[\w가-힣]+(?:법|규정|훈령)`. Implementing it
+surfaced a real bug: some of this corpus's law names (e.g. "병역의무자
+국외여행 업무처리 규정") have a space directly before the "규정" suffix,
+which that pattern can't match across (it assumes the name stem and suffix
+are adjacent with no gap, and the real data isn't like that). So
+`generation/citation_parser.py` builds its regex from the exact `law_name`
+strings already present in `results` instead -- that sidesteps the
+space bug entirely, and it also handles table (별표) citations with no
+separate pattern needed: looking at `_format_articles()` (`answer.py`),
+table chunks' `law_name` field already includes the full "별표 N" (e.g.
+"병역법 시행령 별표 3"), and Gemini just copies it verbatim.
+
+This design leans on the assumption that Gemini reuses `results`' `law_name`
+verbatim in its citations -- `SYSTEM_INSTRUCTION` only specifies the
+citation *shape*, not "use this exact string." Every fixture checked so far
+confirms it does, but that's not a hard guarantee (documented in the code).
+If some future law ever gets cited under a paraphrased name, that citation
+just falls through to a plain text segment -- no crash.
+
+### Tests: two real fixtures, checked down to content
+
+`backend/tests/test_citation_parser.py` + `backend/tests/fixtures/` -- two
+fixtures captured verbatim from real `/api/query` calls against the
+2026-08-03 clean-restarted server (not hand-transcribed):
+
+**Case 1** (`사회복무요원인데 해외 갈 수 있나요`, "I'm a social service
+agent, can I travel abroad"): the answer cites 별표3 (Attached Table 3)
+**four times for four different conditions**, but in `results` those four
+별표3 rows all share the exact same `(law_name, article_no, paragraph_no)`
+-- differing only in `text` (the actual row content), which a regex-based
+matcher can't read. `_find_result_index()` falls back to "the first
+candidate not yet used in this answer" -- an order-based heuristic that
+leans on the LLM's citation order roughly following `results` order. It
+happened to be **exactly right** in this fixture: all 5 citations landed on
+`result_index` 0, 1, 2, 3, 4 in order, and the test doesn't just check
+"result_index isn't null" -- it checks that the text following each
+citation (e.g. "filed an overseas-emigration notice" -> 3 years, "resided 5+
+years" -> the posted-employee exception, "conditional or temporary
+permanent residency" -> 6 months) actually matches the content of the
+`results[i]["text"]` it got matched to.
+
+**This is a known limitation, not a full solution** -- it's an order-based
+fallback, not content-based, so if an answer's citation order ever diverges
+from `results` order (possible in principle, didn't happen in this
+fixture), the matching could be wrong. `_find_result_index()`'s docstring
+documents this along with the next thing to try if it turns out unreliable
+(a content-overlap heuristic comparing words in the trailing sentence
+against each candidate's `text`) -- not implemented yet.
+
+**Case 2** (`유학 중인데 휴학하면 입영연기가 취소되나요`, the leave-of-
+absence question): two citations against two different law names, one of
+which is the space-before-suffix bug case found above
+("병역의무자 국외여행 업무처리 규정 제27조 제3항에 따르면") -- a
+regression test that this now matches correctly. All 5 `pytest` tests pass.
+
+### Real-server integration check
+
+After a clean restart (Flask's debug reloader auto-restarted on the
+`routes/query.py` change, confirmed hash=2dc6d7a4/270 chunks matched prior
+records, same as a manual `pkill` restart would), re-called both questions
+against the real `/api/query` -- confirmed `answer_segments` comes back
+populated end-to-end through the full pipeline (retrieval -> generation ->
+parsing). These two live responses are what became the fixtures above --
+the unit tests and the integration check share the same two calls.

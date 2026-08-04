@@ -75,7 +75,16 @@ JUDGE_MODEL = "gemini-3.5-flash-lite"
 # turned a handful of real 429s into a wall of TimeoutErrors (RAGAS's own
 # retry-of-retries piling on top of gemini_client's own capped backoff).
 # Serializing to 1 worker with 1 retry keeps this from hammering the API.
-JUDGE_RUN_CONFIG = RunConfig(max_workers=1, max_retries=1)
+#
+# timeout=300 (RAGAS default is 180) was added 2026-08-03 after
+# LLMContextPrecisionWithReference came back NaN on both 2026-07-31 and
+# 2026-08-03 runs even with quota healthy and zero 429s in stderr --
+# real-world judge round-trips on JUDGE_MODEL measured at 2-3 minutes
+# (120-180s), right at or past the 180s default, so jobs were timing out
+# client-side before the judge could respond. context_recall, scored in the
+# same reference-based pass, didn't show this failure, which points at
+# per-metric prompt/response length rather than the judge or API key.
+JUDGE_RUN_CONFIG = RunConfig(max_workers=1, max_retries=1, timeout=300)
 
 
 def _run_pipeline(eval_set):
