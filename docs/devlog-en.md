@@ -465,13 +465,59 @@ Full log is in the "Stage 7" section of [`eval_results-en.md`](eval_results-en.m
 Also wrote `backend/README-en.md` and `frontend/README-en.md` (+ Korean
 pairs) this pass, documenting every directory's files in detail.
 
+## Stage 8: Diagnosing `/api/query` latency -- the reranker was the real bottleneck (2026-08-04)
+
+Started from one clue the user pulled out of a shell log: "Loading
+weights" showed up in stderr during one specific request, but not during
+the two prior requests in the same process. The working hypothesis was
+that the embedder (BGE-m3) / reranker were being reloaded on every
+request, and the ask was to verify that first.
+
+The hypothesis turned out to be wrong -- both `embedder.py` and
+`reranker.py` already cached their models correctly at module level
+(`_loaded_models` dict, `_model` global). The actual cause was that
+`answer_question()` returns early -- skipping retrieval/rerank entirely --
+whenever a question is `out_of_scope` (KATUSA-type questions). That means
+both models only get lazy-loaded on the process's **first in-scope
+request**. If the session's first two questions were out-of-scope and the
+third was the first in-scope one, that reproduces the observed log
+exactly. Not a bug -- just a question of which request ends up absorbing
+the cold-start cost.
+
+Still a real problem for actual users (whoever's first genuine question
+after a restart eats the delay), so `app.py` got a `_preload_models()`
+call to load both models eagerly at server startup instead. Separately
+from the root-cause diagnosis, also added a `[timing]` log
+(retrieval/rerank/generate/total) to `answer_question()` so future
+"it's slow" reports can point straight at the actual bottleneck stage.
+
+**That's where the real finding showed up.** After a clean restart, "Loading
+weights" never recurred (confirming the preload fix), but a single request
+was still taking 56-94s. Breaking it down via the new `[timing]` log showed
+**the reranker eating 43-73s, 75-80% of the total** -- dwarfing both
+retrieval (~7s) and generate (5-15s). `routes/query.py` already had a
+comment flagging exactly this risk ("the reranker scores up to 50
+candidates every time on CPU with no `top_k` cutoff, so this could be the
+bottleneck"), and this measurement confirmed it. So the originally
+suspected cause (model reloading) wasn't the real one -- a different
+hypothesis already written into the code was. Without the timing logs,
+this would likely have kept getting misdiagnosed as a cold-start issue.
+
+Diagnosis and instrumentation (preload + timing logs) only this round --
+the reranker itself was left untouched. Full numbers and code are in the
+"Stage 8" section of `docs/eval_results-en.md`.
+
 ## Progress summary
 
-Stages 1-7 are all done. See each stage's section above and
+Stages 1-8 are all done. See each stage's section above and
 `docs/eval_results-en.md` for details.
 
 ## What's left
 
+- **Reranker latency**: the real bottleneck found in Stage 8 -- the CPU
+  CrossEncoder scores up to 50 candidates in full on every request,
+  costing 43-73s per request. Needs one of: shrinking the candidate pool,
+  revisiting batching, or reconsidering device (MPS) -- not yet touched.
 - **Real next-intl English translations**: the routing structure is in
   place from Stage 7, but `messages/en.json` is still a literal copy of
   `ko.json` -- actual translation work remains.

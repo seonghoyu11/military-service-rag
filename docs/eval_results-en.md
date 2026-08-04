@@ -22,6 +22,7 @@
 - [Root-causing and fixing the context_precision NaN (2026-08-03, follow-up)](#root-causing-and-fixing-the-context_precision-nan-2026-08-03-follow-up)
 - [New `answer_segments` field -- citation parsing (2026-08-03)](#new-answer_segments-field----citation-parsing-2026-08-03)
 - [Stage 7: Next.js frontend, real end-to-end verification (2026-08-04)](#stage-7-nextjs-frontend-real-end-to-end-verification-2026-08-04)
+- [Stage 8: Diagnosing `/api/query` latency -- the reranker was the real bottleneck (2026-08-04)](#stage-8-diagnosing-apiquery-latency----the-reranker-was-the-real-bottleneck-2026-08-04)
 
 ## Stage 1: Data parsing validation (2026-07-09)
 
@@ -1815,3 +1816,138 @@ All 12 checks passed, zero console errors, and looking at the actual
 rendered screens caught one real bug (the duplicated 별표 label) that got
 fixed on the spot. Full component/file structure is in
 [`../frontend/README-en.md`](../frontend/README-en.md).
+
+## Stage 8: Diagnosing `/api/query` latency -- the reranker was the real bottleneck (2026-08-04)
+
+### Background
+
+The user pulled a clue from a shell log: during one specific request
+(17:24:48), "Loading weights" showed up again in server stderr -- something
+that hadn't happened on the two prior requests in the same process
+(17:21:53 / 17:23:02). Suspecting the embedder (BGE-m3) / reranker
+(bge-reranker-v2-m3) were being reloaded per request, they asked for this
+to be investigated.
+
+### Check 1: model caching -- already correct
+
+- `backend/pipeline/embedder.py`'s `load_model()`: module-level caching via
+  the `_loaded_models` dict.
+- `backend/retrieval/reranker.py`'s `_get_model()`: module-level caching via
+  the `_model` global.
+
+Neither re-instantiates on every call. The "reloaded on every request"
+hypothesis doesn't hold given the actual code.
+
+### Check 2: the real cause -- lazy-loading hidden behind the out-of-scope early return
+
+`routes/query.py`'s `answer_question()` returns early -- without ever
+calling `hybrid.search()` or `reranker.rerank()` -- whenever
+`intent["out_of_scope"]` is True (KATUSA/recruitment-program questions
+excluded from scope, see the project's "KATUSA scope exclusion" note).
+That means both models only get lazy-loaded on **the first in-scope
+request the process ever sees**. If 17:21:53 and 17:23:02 were
+out-of-scope questions and 17:24:48 was the session's first in-scope one,
+that reproduces the observed log pattern exactly -- not a bug, just a
+question of which request ends up absorbing the cold-start cost.
+
+### Check 3: reloader restart -- ruled out
+
+`app.py`'s `app.run(debug=True)` turns on the Werkzeug reloader. The user
+didn't recall saving any file around the time of the slow request, and no
+new `[startup] pid=...` line appeared at that point either, so a reloader
+restart was judged unlikely.
+
+### Fix 1: eager model preload
+
+Added `_preload_models()` to `app.py`, called right after `create_app()`
+and before `app.run()`, so both models load up front instead of on
+whichever request happens to need them first:
+
+```python
+def _preload_models():
+    t0 = time.time()
+    load_embedder_model("bge-m3")
+    reranker_module.preload()
+    print(f"[startup] models preloaded in {time.time() - t0:.2f}s", file=sys.stderr)
+```
+
+`reranker.py` now exposes a public `preload()` wrapper around
+`_get_model()`. This moves the cold-start cost to deploy/restart time
+(felt only by whoever runs the server), so real user requests always hit
+an already-cached model. (Because of how the `debug` reloader works, the
+monitor process and the actual serving child process each run this once,
+so preload effectively runs twice at startup -- still a one-time,
+request-independent cost, so this was accepted as-is.)
+
+### Fix 2: per-stage timing logs
+
+Added a `[timing]` log to `answer_question()`, next to the existing
+`[margin]` log, covering retrieval/rerank/generate/total:
+
+```python
+print(
+    f"[timing] query={question!r} retrieval={t1-t0:.2f}s rerank={t2-t1:.2f}s "
+    f"generate={t3-t2:.2f}s total={t3-t0:.2f}s",
+    file=sys.stderr,
+)
+```
+
+On the `low_confidence` path, where `generate_answer()` never gets
+called, `t3` is set equal to `t2` so the log still fires with
+`generate=0.00s` instead of breaking.
+
+### Verification: clean restart + 4 measured queries
+
+Startup log -- "Loading weights" appears exactly twice, once each for the
+reloader's monitor process (pid 45958) and the actual serving child (pid
+46097), and zero times during request handling afterward:
+
+```
+[startup] models preloaded in 19.32s
+[startup] pid=45958 law_chunks.json: 270 chunks, mtime=1783695412 | ...
+ * Restarting with stat
+...
+[startup] models preloaded in 19.98s
+[startup] pid=46097 law_chunks.json: 270 chunks, mtime=1783695412 | ...
+```
+
+Ran the 3 anchor queries (`data/eval/test_queries.json` ids 1-3) plus the
+originally-slow question ("영주권자인데 국외여행허가 어떻게 받나요?" --
+"I have a green card, how do I get an overseas-travel permit?") as real
+HTTP requests and collected the `[timing]` output:
+
+| Query | retrieval | rerank | generate | total |
+|---|---|---|---|---|
+| Green card holder under 25 (anchor #1) | 7.65s | 47.55s | 5.42s | 60.62s |
+| Overseas student, postponing the conscription exam (anchor #2) | 6.65s | 73.11s | 14.52s | 94.29s |
+| Currently overseas, postponing the conscription exam (anchor #3) | 7.40s | 72.67s | 7.26s | 87.33s |
+| Green card holder, overseas-travel permit (the originally-slow question) | 7.03s | 42.68s | 7.00s | 56.71s |
+
+### Interpretation
+
+- Zero recurrences of "Loading weights" during request handling --
+  confirms the preload fix eliminated in-request model reloading.
+- Even so, total latency is still 56-94s. **rerank alone accounts for
+  43-73s, 75-80% of the total** -- dwarfing both retrieval (~7s, the cost
+  of encoding a single query with BGE-m3 on CPU) and generate (5-15s, the
+  Gemini API call).
+- `routes/query.py` already had a comment flagging exactly this
+  possibility: "since issue 1 was fixed, the reranker scores up to 50
+  candidates every time without a `top_k` cutoff, so this could be the
+  bottleneck." The `reranker.rerank(question, candidates,
+  top_k=len(candidates))` call does score the full candidate pool (up to
+  50) with a CPU CrossEncoder, exactly as that comment suspected -- and
+  this measurement confirms it.
+
+### Conclusion
+
+The original hypothesis ("models get reloaded on every request") was
+wrong -- caching was already working correctly. What was actually going
+on were two separate issues: (1) the out-of-scope early-return structure
+meant the lazy-load cost landed on whichever request happened to be the
+session's first in-scope one -- fixed via eager preload -- and (2) the
+reranker scoring the full candidate pool (up to 50) on CPU every request,
+costing 43-73s per request, is the actual dominant bottleneck. Only
+diagnosis and timing instrumentation were added this round; the reranker
+itself (candidate-pool size, batching, device) was left untouched. Left
+as the next task.

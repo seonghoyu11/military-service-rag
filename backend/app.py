@@ -9,6 +9,8 @@ from routes import query as query_module
 from routes import profile as profile_module
 from routes import feedback as feedback_module
 from classifier.model import POST_SERVICE_KEYWORDS
+from pipeline.embedder import load_model as load_embedder_model
+from retrieval import reranker as reranker_module
 
 
 def _log_startup_fingerprint():
@@ -34,6 +36,22 @@ def _log_startup_fingerprint():
     )
 
 
+def _preload_models():
+    """
+    Forces the embedder/reranker weights to load now instead of on whichever
+    request happens to be the first in-scope query the process sees. Without
+    this, that unlucky request eats the full model-load cost inline (BGE-m3 +
+    bge-reranker-v2-m3 both loading lazily add several seconds) -- see
+    docs/eval_results.md "cold-start on first in-scope query".
+    """
+    import time
+
+    t0 = time.time()
+    load_embedder_model("bge-m3")
+    reranker_module.preload()
+    print(f"[startup] models preloaded in {time.time() - t0:.2f}s", file=sys.stderr)
+
+
 def create_app():
     app = Flask(__name__)
     CORS(app)
@@ -44,6 +62,7 @@ def create_app():
 
 
 app = create_app()
+_preload_models()
 _log_startup_fingerprint()
 
 if __name__ == "__main__":

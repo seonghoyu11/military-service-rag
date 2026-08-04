@@ -15,6 +15,11 @@ def _get_model():
     return _model
 
 
+def preload():
+    """Forces the reranker weights to load now. See app.py's _preload_models."""
+    _get_model()
+
+
 def rerank(query, candidates, top_k=5):
     """
     candidates: list of (chunk, score) tuples, e.g. hybrid.search() output.

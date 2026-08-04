@@ -22,6 +22,7 @@
 - [context_precision NaN 원인 규명 및 수정 (2026-08-03, 후속)](#context_precision-nan-원인-규명-및-수정-2026-08-03-후속)
 - [`answer_segments` 필드 신설 — citation 파싱 (2026-08-03)](#answer_segments-필드-신설--citation-파싱-2026-08-03)
 - [Stage 7: Next.js 프론트엔드 실구동 검증 (2026-08-04)](#stage-7-nextjs-프론트엔드-실구동-검증-2026-08-04)
+- [Stage 8: `/api/query` 응답 지연 진단 — 재랭커가 진짜 병목 (2026-08-04)](#stage-8-apiquery-응답-지연-진단--재랭커가-진짜-병목-2026-08-04)
 
 ## 1단계: 데이터 파싱 검증 (2026-07-09)
 
@@ -1578,3 +1579,129 @@ Playwright 헤드리스 브라우저로 실제 화면을 검증했다. 코드 �
 12개 체크 전부 통과, 콘솔 에러 0건, 실제 화면 확인으로 버그 1건(별표 라벨
 중복) 발견 즉시 수정. 상세 컴포넌트/파일 구조는
 [`../frontend/README.md`](../frontend/README.md) 참고.
+
+## Stage 8: `/api/query` 응답 지연 진단 — 재랭커가 진짜 병목 (2026-08-04)
+
+### 배경
+
+사용자가 셸 로그에서 단서를 확보: 특정 요청(17:24:48) 처리 도중에만 서버
+stderr에 "Loading weights" 로그가 다시 찍혔다(같은 프로세스에서 그 전
+두 요청, 17:21:53/17:23:02엔 안 찍힘). 임베더(BGE-m3)/reranker
+(bge-reranker-v2-m3)가 요청마다 재로딩되는 게 아닌지 의심된 상태로
+조사를 요청받음.
+
+### 확인 1: 모델 캐싱 구조 — 이미 정상
+
+- `backend/pipeline/embedder.py`의 `load_model()`: `_loaded_models` dict로
+  모듈 레벨 캐싱.
+- `backend/retrieval/reranker.py`의 `_get_model()`: `_model` 전역 변수로
+  캐싱.
+
+둘 다 "함수 호출마다 새로 인스턴스화" 구조가 아니었다 — "매 요청
+재로딩" 가설은 코드상 성립하지 않는다.
+
+### 확인 2: 실제 원인 — out-of-scope 조기 리턴 뒤에 숨은 lazy-load
+
+`routes/query.py`의 `answer_question()`은 `intent["out_of_scope"]`가
+True면 `hybrid.search()`/`reranker.rerank()`를 아예 호출하지 않고
+바로 리턴한다(카투사/모집병 등 스코프 제외 케이스, 관련: 프로젝트
+메모리 "KATUSA scope exclusion"). 즉 두 모델은 **그 프로세스의 첫
+in-scope 요청**에서 처음 lazy-load된다. 17:21:53/17:23:02가
+out-of-scope 질문이었고 17:24:48이 그 세션의 첫 in-scope 질문이었다면,
+관찰된 로그 패턴과 정확히 일치한다 — 버그가 아니라 "cold-start 비용을
+어느 요청이 떠안느냐"의 문제였다.
+
+### 확인 3: 리로더 재시작 가능성 — 배제
+
+`app.py`의 `app.run(debug=True)`는 Werkzeug 리로더를 켠다. 문제의
+요청 시점에 파일을 저장한 기억이 없다는 점, `[startup] pid=...` 로그가
+그 시점에 새로 찍히지 않았다는 점(사용자 확인)으로 리로더 재시작
+가능성은 낮게 봤다.
+
+### 수정 1: 모델 eager preload
+
+`app.py`에 `_preload_models()`를 추가해서 `create_app()` 직후,
+`app.run()` 호출 전에 두 모델을 강제로 로드하도록 바꿨다:
+
+```python
+def _preload_models():
+    t0 = time.time()
+    load_embedder_model("bge-m3")
+    reranker_module.preload()
+    print(f"[startup] models preloaded in {time.time() - t0:.2f}s", file=sys.stderr)
+```
+
+`reranker.py`엔 `_get_model()`을 감싸는 `preload()` public 함수를 새로
+노출했다. 이렇게 하면 cold-start 비용이 배포/재시작 시점(관리자만
+체감)으로 옮겨가고, 실사용자 요청은 항상 캐시된 모델을 쓴다. (`debug`
+리로더 특성상 모니터 프로세스 + 자식 프로세스가 각자 한 번씩 총 2회
+preload가 실행되는데, 이것도 요청 처리와 무관한 기동 단계 비용이라
+허용한다.)
+
+### 수정 2: 단계별 타이밍 로그
+
+`answer_question()`에 기존 `[margin]` 로그 근처로 `[timing]` 로그를
+추가했다(retrieval/rerank/generate/total 각 단계):
+
+```python
+print(
+    f"[timing] query={question!r} retrieval={t1-t0:.2f}s rerank={t2-t1:.2f}s "
+    f"generate={t3-t2:.2f}s total={t3-t0:.2f}s",
+    file=sys.stderr,
+)
+```
+
+`low_confidence`라 `generate_answer()`를 안 부르는 경로에서도 로그가
+끊기지 않게 `t3=t2`로 둬서 `generate=0.00s`로 찍히도록 처리했다.
+
+### 검증: 클린 재시작 + 4개 쿼리 실측
+
+기동 로그 — "Loading weights"가 리로더 모니터 프로세스(pid 45958)와
+실제 서빙 자식 프로세스(pid 46097) 기동 시 각 1회씩, 총 2회만 찍히고
+이후 요청 처리 중엔 0회:
+
+```
+[startup] models preloaded in 19.32s
+[startup] pid=45958 law_chunks.json: 270 chunks, mtime=1783695412 | ...
+ * Restarting with stat
+...
+[startup] models preloaded in 19.98s
+[startup] pid=46097 law_chunks.json: 270 chunks, mtime=1783695412 | ...
+```
+
+anchor 쿼리 3개(`data/eval/test_queries.json` id 1~3) + 원래 느렸던
+질문("영주권자인데 국외여행허가 어떻게 받나요?")을 실제 HTTP로 호출해
+`[timing]` 로그를 그대로 수집:
+
+| 쿼리 | retrieval | rerank | generate | total |
+|---|---|---|---|---|
+| 영주권 25세 미만 (anchor #1) | 7.65s | 47.55s | 5.42s | 60.62s |
+| 유학생 재학중 병역판정검사 연기 (anchor #2) | 6.65s | 73.11s | 14.52s | 94.29s |
+| 해외체류중 병역판정검사 연기 (anchor #3) | 7.40s | 72.67s | 7.26s | 87.33s |
+| 영주권자 국외여행허가 (원래 느렸던 질문) | 7.03s | 42.68s | 7.00s | 56.71s |
+
+### 해석
+
+- "Loading weights" 재발 0건 — preload 수정으로 요청 중 모델 재로딩이
+  사라진 것을 확인.
+- 그런데도 total이 여전히 56~94초로 느리다. **rerank가 43~73초로 전체의
+  75~80%**를 차지 — retrieval(~7초, CPU에서 BGE-m3로 쿼리 1개
+  인코딩하는 비용)이나 generate(5~15초, Gemini API 호출)보다 압도적으로
+  크다.
+- `routes/query.py`엔 이미 이 가능성을 짚어둔 주석이 있었다 — "이슈 1
+  수정 이후 재랭커가 최대 50개 후보를 top_k 절삭 없이 매번 스코어링하는
+  구조라 병목일 수 있다." `reranker.rerank(question, candidates,
+  top_k=len(candidates))` 호출이 실제로 후보 전체(최대 50개)를 CPU
+  CrossEncoder로 스코어링하는 구조 그대로였고, 이번 실측으로 그 가설이
+  확인됐다.
+
+### 결론
+
+최초 가설("모델이 매 요청 재로딩된다")은 틀렸다 — 캐싱은 이미 정상
+동작 중이었다. 실제로는 두 가지 서로 다른 문제가 섞여 있었다: (1)
+out-of-scope 조기 리턴 구조 때문에 lazy-load 비용이 세션의 첫
+in-scope 요청에 몰리는 문제 — eager preload로 수정, (2) reranker가
+CPU에서 후보 최대 50개 전체를 매번 스코어링하느라 요청당 43~73초를
+쓰는 게 실제 지배적 병목이라는 것 — 이번엔 진단·타이밍 로그
+추가까지만 하고 재랭커 자체(후보 풀 크기, 배치, device)는 손대지
+않았다. 다음 과제로 남겨둔다.

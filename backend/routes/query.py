@@ -1,6 +1,7 @@
 import os
 import json
 import sys
+import time
 
 from flask import Blueprint, request, jsonify
 
@@ -162,12 +163,15 @@ def answer_question(question, session_user_type=None):
             "related_scope_info": related_scope_info,
         }
 
+    t0 = time.time()
     candidates = hybrid.search(question, _bm25, _chunks, top_k=40, candidate_pool=50)
     candidates = _inject_anchor_chunks(candidates, intent.get("anchor_lookups"))
+    t1 = time.time()
     # top_k=len(candidates): score every candidate, don't truncate yet -- both
     # boosts below need the full reranked list to have a chance at surfacing
     # a chunk the reranker itself scored outside the top 15.
     reranked = reranker.rerank(question, candidates, top_k=len(candidates))
+    t2 = time.time()
 
     # Margin (top1 - top2) diagnostic, logged pre-boost so the directional/anchor
     # nudges below don't distort the reranker's own confidence signal. Collecting
@@ -211,6 +215,15 @@ def answer_question(question, session_user_type=None):
         except Exception as e:
             print(f"[answer_error] query={question!r} error={e!r}", file=sys.stderr)
             answer_error = f"{type(e).__name__}: {e}"
+        t3 = time.time()
+    else:
+        t3 = t2
+
+    print(
+        f"[timing] query={question!r} retrieval={t1-t0:.2f}s rerank={t2-t1:.2f}s "
+        f"generate={t3-t2:.2f}s total={t3-t0:.2f}s",
+        file=sys.stderr,
+    )
 
     # Structured form of `answer` for the frontend's clickable citation
     # chips (chip click -> scroll/highlight the matching card in `results`).
