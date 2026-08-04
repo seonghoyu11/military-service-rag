@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+/* Ported from DutyCompass.dc.html's <helmet><style> block. */
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(27, 42, 74, 0.18);
+  border-radius: 3px;
+}
+@keyframes dcPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 4px rgba(27, 42, 74, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(27, 42, 74, 0.06);
+  }
+}
+
+body {
+  font-family:
+    "Pretendard",
+    -apple-system,
+    "Apple SD Gothic Neo",
+    "Malgun Gothic",
+    sans-serif;
+}
+
+/* Hover states ported from DutyCompass.dc.html's style-hover attributes
+   (the DC runtime's per-element pseudo-class registration isn't available
+   in plain React, so these live as regular CSS instead). */
+.dc-en-pill:hover {
+  background: var(--pill-hover-bg);
+}
+.dc-chip:hover {
+  border-color: var(--chip-hover-border);
+  color: var(--chip-hover-text);
+}
+.dc-cite:hover {
+  background: var(--cite-hover-bg);
+}
