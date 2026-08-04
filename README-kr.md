@@ -98,18 +98,21 @@ RAG 기반 병역 행정절차 안내 챗봇입니다.
 ## 프로젝트 구조
 
 ```
-backend/
+backend/                # Flask API -- 파일별 상세 설명은 backend/README.md 참고
 ├── data/               # 원본 PDF, 파싱된 JSON, 평가용 test set
 ├── pipeline/           # 파싱 → 청킹 → 태깅 → 임베딩
 ├── retrieval/          # BM25 / Dense / Hybrid / Reranker
-├── classifier/         # Intent classifier 학습·추론
-├── generation/          # Gemini API 답변 생성 연동
+├── classifier/         # 규칙 기반 intent/유저타입 분류기
+├── generation/          # Gemini API 답변 생성 + citation 파싱
 ├── routes/             # Flask API 엔드포인트
 ├── db/                 # MongoDB 연결
-└── evaluation/         # RAGAS 기반 정량 평가
+├── evaluation/         # RAGAS 기반 정량 평가
+└── tests/              # pytest 유닛테스트
 
-frontend/               # prototype.html(현재 동작하는 UI) + Next.js 앱 스캐폴딩(7단계, 미구현)
-scripts/                # DB 세팅 및 파이프라인 실행 스크립트
+frontend/               # Next.js(App Router) + TypeScript + Tailwind + next-intl --
+                         # 파일별 상세 설명은 frontend/README.md 참고
+scripts/                # 현재 빈 스텁(setup_db.py, run_pipeline.py) --
+                         # 실제 파이프라인 스크립트는 backend/pipeline/ 아래에 있음
 docs/                   # 아키텍처 설명, 평가 결과 정리
 ```
 
@@ -149,13 +152,15 @@ python app.py
 API는 http://localhost:5001 에서 서비스됩니다. 첫 요청은 임베딩/리랭커
 모델이 그때 처음 로드되기 때문에 느립니다.
 
-### 5. UI 열기
-Next.js 프론트엔드(7단계)는 아직 구현 전입니다 — 지금 실제로 동작하는
-화면은 위 API에 직접 요청을 보내는 정적 HTML/JS 페이지
-[`frontend/prototype.html`](frontend/prototype.html) 하나뿐입니다:
+### 5. 프론트엔드 실행
 ```bash
-open frontend/prototype.html   # 또는 Finder에서 더블클릭
+cd frontend
+npm install
+npm run dev
 ```
+http://localhost:3000 을 열면 자동으로 `/ko`로 리다이렉트됩니다. 프론트엔드
+구조, next-intl 설정, 알려진 주의사항은 [`frontend/README.md`](frontend/README.md)
+참고.
 
 ## API 레퍼런스
 

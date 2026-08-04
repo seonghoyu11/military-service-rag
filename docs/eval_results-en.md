@@ -21,6 +21,7 @@
 - [Stage 5 default-model lite switch attempt and rollback (2026-08-03)](#stage-5-default-model-lite-switch-attempt-and-rollback-2026-08-03)
 - [Root-causing and fixing the context_precision NaN (2026-08-03, follow-up)](#root-causing-and-fixing-the-context_precision-nan-2026-08-03-follow-up)
 - [New `answer_segments` field -- citation parsing (2026-08-03)](#new-answer_segments-field----citation-parsing-2026-08-03)
+- [Stage 7: Next.js frontend, real end-to-end verification (2026-08-04)](#stage-7-nextjs-frontend-real-end-to-end-verification-2026-08-04)
 
 ## Stage 1: Data parsing validation (2026-07-09)
 
@@ -1752,3 +1753,65 @@ against the real `/api/query` -- confirmed `answer_segments` comes back
 populated end-to-end through the full pipeline (retrieval -> generation ->
 parsing). These two live responses are what became the fixtures above --
 the unit tests and the integration check share the same two calls.
+
+## Stage 7: Next.js frontend, real end-to-end verification (2026-08-04)
+
+### Background
+
+Ported `DutyCompass.dc.html` (a Claude Design prototype running on mock
+data) to Next.js (App Router) + TypeScript + Tailwind CSS, wired to the real
+`/api/query`, then ran the backend (5001) and frontend (3000) together and
+drove a real browser against it with headless Playwright. A bug (the
+duplicated 별표 label below) only showed up in an actual screenshot, not in
+code review or a clean build/lint pass -- worth not skipping this step.
+
+### Automated checks (12/12 PASS)
+
+| # | Check | Result |
+|---|---|---|
+| 1 | `/` redirects to `/ko` | ✅ |
+| 2 | Normal answer renders ("Permanent resident, how long can I put off enlistment") | ✅ |
+| 3 | 별표 label doesn't render as "제별표3조" | ✅ (see below -- it was broken a different way at first) |
+| 4 | Evidence-article toggle works | ✅ |
+| 5 | Citation chip present | ✅ (1) |
+| 6 | Clicking a citation doesn't crash (scroll + highlight) | ✅ |
+| 7 | Low-confidence notice shows ("My permanent residency is only 2 years old") | ✅ |
+| 8 | Low-confidence always shows evidence, no toggle | ✅ |
+| 9 | Out-of-scope message shows ("I want to apply for KATUSA") | ✅ |
+| 10 | Dark-mode toggle works | ✅ (confirmed visually via screenshot) |
+| 11 | EN tooltip shows "English version coming soon" | ✅ |
+| 12 | Clicking EN does NOT actually change locale/URL | ✅ |
+
+Zero console errors. The `answer_error` state can't be forced from the real
+backend, so it was verified separately via a `TEMP-DEV-ONLY` mock branch in
+`lib/api.ts` (triggered by `question === "__FORCE_ANSWER_ERROR__"`) --
+confirmed the amber advisory notice + evidence toggle render with no
+`AnswerCard`, as intended -- then **fully removed**, confirmed via `grep`.
+
+### Found and fixed: a duplicated 별표 label bug
+
+Check 3 passed on the first pass in the sense that it wasn't malformed as
+"제별표3조" -- but looking at the actual evidence-card title in the
+screenshot, it read **"병역법 시행령 별표 3 별표3"**, a visible duplicate.
+Cause: `formatArticleLabel`'s table-source branch was appending
+`article_no` ("별표3") after `law_name` (which already contains "병역법
+시행령 별표 3") -- the same "law_name already embeds 별표 N" fact already
+discovered once in `generation/citation_parser.py` got missed during the
+frontend port. Fixed by returning just `lawName` or just `articleNo` (per
+the `withLawName` option) when `article_no` starts with "별표", instead of
+concatenating both. Re-verified: 12/12 still passed, and the screenshot now
+shows the correct "병역법 시행령 별표 3".
+
+### Screenshots
+
+`00-empty-state`, `01-normal-answer`, `02-citation-highlight` (captured both
+before and after the fix), `03-low-confidence`, `04-oos`, `05-dark-mode`,
+`06-en-tooltip`, `07-answer-error` -- 13 total. Not committed to the repo
+(disposable verification artifacts).
+
+### Conclusion
+
+All 12 checks passed, zero console errors, and looking at the actual
+rendered screens caught one real bug (the duplicated 별표 label) that got
+fixed on the spot. Full component/file structure is in
+[`../frontend/README-en.md`](../frontend/README-en.md).

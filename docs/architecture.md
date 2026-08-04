@@ -12,7 +12,7 @@
   - [4단계: Intent Classifier (경량, rule-based) — 완료](#4단계-intent-classifier-경량-rule-based--완료)
   - [5단계: 답변 생성 (Google Gemini API) — 완료](#5단계-답변-생성-google-gemini-api--완료)
   - [6단계: Flask API — 세션 프로필 + 피드백 — 완료](#6단계-flask-api--세션-프로필--피드백--완료)
-  - [7단계: Next.js 프론트엔드 — 미착수](#7단계-nextjs-프론트엔드--미착수)
+  - [7단계: Next.js 프론트엔드 — 완료](#7단계-nextjs-프론트엔드--완료)
 - [스코프 결정 사항](#스코프-결정-사항)
 
 ## 전체 구조
@@ -97,10 +97,19 @@ Anthropic Claude API에서 Google Gemini API로 전환 결정 (전환 사유는 
 - 요청/응답 형식과 `curl` 예시는 최상위 [`README-kr.md`](../README-kr.md#api-레퍼런스)
   참고.
 
-### 7단계: Next.js 프론트엔드 — 미착수
-현재 유일하게 동작하는 UI는 6단계 API에 직접 요청을 보내는 정적 페이지
-`frontend/prototype.html`뿐입니다. next-intl 한/영 토글을 포함한 Next.js
-프론트엔드는 아직 구현되지 않았습니다.
+### 7단계: Next.js 프론트엔드 — 완료
+`frontend/prototype.html`(정적 HTML/JS 목업)을 Next.js(App Router) +
+TypeScript + Tailwind CSS로 포팅하고 실제 6단계 API(`/api/query`)에 연결.
+채팅형 UI(질문 입력 → 4단계 로딩 애니메이션 → 답변 카드 + citation 칩 +
+근거 조항 카드, out_of_scope/low_confidence/answer_error 상태별 분기,
+다크모드)로 구성되며, next-intl로 `/ko`·`/en` 라우팅 구조까지 스캐폴딩됨
+(실제 영문 번역 문자열은 아직 미작성 — EN 버튼은 현재 "준비 중" 툴팁만
+표시). 헤드리스 브라우저(Playwright)로 정상 답변/저신뢰/OOS/answer_error
+4개 시나리오 + citation 클릭 스크롤·하이라이트 + 별표 라벨 표기 +
+다크모드/EN 툴팁까지 실구동 검증 완료. 파일별 상세 구조는
+[`../frontend/README.md`](../frontend/README.md), 포팅 과정에서 발견한
+이슈(별표 라벨 중복 버그, Next.js 16의 `middleware.ts`→`proxy.ts` 개명 등)는
+`docs/devlog.md`의 "Stage 7" 항목 참고.
 
 ## 스코프 결정 사항
 - **카투사/어학병 등 모집병**: 데이터셋에 포함하지 않기로 결정 (지원자격이 법조문이 아니라 매년
@@ -108,4 +117,5 @@ Anthropic Claude API에서 Google Gemini API로 전환 결정 (전환 사유는 
   준용조항이 끝없이 딸려와 스코프가 무한정 커짐). 관련 질문은 Intent Classifier에서 키워드
   매칭으로 감지해 "구체적 지원자격은 매년 병무청 모집공고에서 확인 필요" fallback 안내로 응답
   (4단계에서 구현 완료).
-- **프론트엔드 한/영 토글**: 7단계에서 next-intl로 구현 예정 (재외국민 타겟이라 필수).
+- **프론트엔드 한/영 토글**: next-intl 라우팅 구조는 7단계에서 갖췄으나, 실제 영문 번역은
+  후속 작업으로 남음(재외국민 타겟이라 최종적으로는 필수).

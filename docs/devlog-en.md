@@ -408,16 +408,80 @@ there were zero 429/quota errors -- today's 8 total `gemini-3.6-flash` calls
 accepted knowingly. Full tables and logs are in the new section of
 `docs/eval_results-en.md`.
 
+## Stage 7: Next.js frontend port (2026-08-04)
+
+Ported the Claude Design prototype (`DutyCompass.dc.html` -- a finished UI
+running on its own DSL runtime, backed by mock data) to Next.js (App Router)
++ TypeScript + Tailwind CSS, and wired it to the real `/api/query` instead
+of the mock. Went into plan mode before writing any code -- this was a
+from-scratch app scaffold, and getting the structure right up front was
+worth it.
+
+**Design decisions already locked in during planning:**
+- Kept the theme system as CSS-custom-property inline injection, exactly
+  like the source (moving to Tailwind `dark:` classes would mean
+  hand-transcribing ~90 color values into two places -- pure transcription risk).
+- Scaffolded next-intl's `app/[locale]/` routing now, but deferred actual
+  English translations to a follow-up (`localePrefix: "always"` keeps `/ko`
+  and `/en` symmetric so the routing never needs revisiting).
+- Designed the loading animation as a state machine: advance through 4
+  fixed-timing stages, but if the real response is slower than that, hold at
+  the last stage with its existing pulse animation for a "still working"
+  signal; if the response is faster (e.g. out-of-scope), snap all stages to
+  checked and hold briefly before applying the result.
+
+**Things only found by actually writing the code:**
+- `DutyCompass.dc.html`'s paragraph-number formatting turned out to be plain
+  "Art. N" text, not the circled numerals (①②③) the porting instructions
+  assumed -- caught by re-reading the actual source and corrected.
+- Didn't use the originally-proposed citation-parsing design (a generic
+  regex recognizing law names) -- built the regex from the literal
+  `law_name` strings already in `results` instead, since the generic
+  approach would have failed to match law names with an internal space
+  (e.g. "병역의무자 국외여행 업무처리 규정").
+- Next.js 16 (the latest at scaffold time) auto-generates an `AGENTS.md`
+  warning that "this version may differ from your training data" -- this
+  actually paid off: the bundled local docs caught that `middleware.ts` had
+  been renamed to `proxy.ts` (export name too, `middleware` -> `proxy`)
+  before any code was written against the old convention.
+- Hit React Compiler's newer lint rules (`set-state-in-effect`,
+  `immutability`) -- fixed two typing/reveal-animation hooks and one
+  answer-rendering spot to use React's "adjust state during render" pattern
+  instead of calling setState inside an effect body.
+- **A duplicated 별표 (table) label bug**: `formatArticleLabel` was
+  appending `article_no` ("별표3") after `law_name` (which already contains
+  "병역법 시행령 별표 3"), rendering a visible duplicate. Code review alone
+  didn't catch this -- **only actually looking at a screenshot did**, which
+  justified not skipping the headless-browser verification pass.
+
+**Verification**: ran the backend (5001) and frontend (3000) together and
+drove a headless browser via Playwright -- normal answer (including citation
+click -> scroll+highlight), low-confidence, out-of-scope, and
+`answer_error` (via a temporary mock, fully removed after verification)
+scenarios, plus 별표 label rendering, dark mode, and the EN "coming soon"
+tooltip: 12/12 checks passed, zero console errors, 13 screenshots captured.
+Full log is in the "Stage 7" section of [`eval_results-en.md`](eval_results-en.md).
+
+Also wrote `backend/README-en.md` and `frontend/README-en.md` (+ Korean
+pairs) this pass, documenting every directory's files in detail.
+
 ## Progress summary
 
-Stages 1-6 are all done. See each stage's section above and
+Stages 1-7 are all done. See each stage's section above and
 `docs/eval_results-en.md` for details.
 
 ## What's left
 
-- **Stage 7**: the Next.js frontend — a Korean/English toggle via
-  next-intl is required, since the target users are overseas Koreans.
+- **Real next-intl English translations**: the routing structure is in
+  place from Stage 7, but `messages/en.json` is still a literal copy of
+  `ko.json` -- actual translation work remains.
+- **A proofread pass on `messages/ko.json`**: the Korean text in the porting
+  source arrived with corrupted encoding, so a number of strings were
+  reconstructed via pattern-matching -- worth a review.
 
 Related docs: [architecture-en.md](architecture-en.md) (overall structure),
 [eval_results-en.md](eval_results-en.md) (the full raw evaluation log this
-document is distilled from — much more detailed).
+document is distilled from — much more detailed), and
+[`../backend/README-en.md`](../backend/README-en.md) /
+[`../frontend/README-en.md`](../frontend/README-en.md) for a
+directory-by-directory file breakdown.

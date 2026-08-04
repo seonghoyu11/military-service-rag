@@ -12,7 +12,7 @@
   - [Stage 4: Intent classifier (lightweight, rule-based) — Done](#stage-4-intent-classifier-lightweight-rule-based--done)
   - [Stage 5: Answer generation (Google Gemini API) — Done](#stage-5-answer-generation-google-gemini-api--done)
   - [Stage 6: Flask API — session profile + feedback — Done](#stage-6-flask-api--session-profile--feedback--done)
-  - [Stage 7: Next.js frontend — Not started](#stage-7-nextjs-frontend-not-started)
+  - [Stage 7: Next.js frontend — Done](#stage-7-nextjs-frontend--done)
 - [Scope decisions](#scope-decisions)
 
 ## Overall structure
@@ -131,11 +131,23 @@ wired into `routes/query.py`, and faithfulness-spot-checked (full results in
 - Full request/response shapes and `curl` examples are in the top-level
   [`README.md`](../README.md#api-reference).
 
-### Stage 7: Next.js frontend — Not started
-The only working UI so far is the self-contained static page
-`frontend/prototype.html`, which talks to the Stage 6 API directly. The
-Next.js frontend (including the next-intl EN/KO toggle) has not been built
-yet.
+### Stage 7: Next.js frontend — Done
+Ported `frontend/prototype.html` (a static HTML/JS mock) to Next.js (App
+Router) + TypeScript + Tailwind CSS, wired to the real Stage 6 API
+(`/api/query`). The chat UI covers question submission -> 4-stage loading
+animation -> answer card with clickable citation chips + evidence-article
+cards, per-state branches for out_of_scope/low_confidence/answer_error, and
+a dark mode toggle. next-intl's `/ko`/`/en` routing structure is scaffolded
+(actual English translation strings aren't written yet -- the EN button
+currently only shows a "coming soon" tooltip). Verified end-to-end with a
+headless browser (Playwright): normal-answer/low-confidence/out-of-scope/
+answer_error scenarios, citation-click scroll+highlight, correct 별표
+(table) label rendering, and dark-mode/EN-tooltip regressions all passed.
+Full file-by-file structure is in
+[`../frontend/README-en.md`](../frontend/README-en.md); issues found during
+the port (a duplicated 별표 label bug, Next.js 16 renaming
+`middleware.ts` to `proxy.ts`, etc.) are recorded in the "Stage 7" entry of
+`docs/devlog-en.md`.
 
 ## Scope decisions
 - **KATUSA / language-soldier recruitment**: deliberately excluded from the
@@ -147,6 +159,7 @@ yet.
   scope balloon indefinitely. Related questions are caught by keyword matching
   in the intent classifier and answered with a fallback message pointing users
   to the current-year MMA recruitment notice (implemented in Stage 4).
-- **Frontend KO/EN toggle**: planned for Stage 7 via next-intl — required
-  since the target users are overseas Koreans, many more comfortable reading
-  English.
+- **Frontend KO/EN toggle**: the next-intl routing structure is in place as of
+  Stage 7, but actual English translations are follow-up work -- ultimately
+  required since the target users are overseas Koreans, many more comfortable
+  reading English.

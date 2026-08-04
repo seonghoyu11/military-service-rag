@@ -92,18 +92,21 @@ The following documents are public government works collected from the [National
 ## Project Structure
 
 ```
-backend/
+backend/            # Flask API -- see backend/README-en.md for a full file-by-file breakdown
 ├── data/           # Raw PDFs, parsed JSONs, evaluation test sets
 ├── pipeline/       # Parsing → Chunking → Tagging → Embedding
 ├── retrieval/      # BM25 / Dense / Hybrid / Reranker logic
-├── classifier/     # Intent classifier training and inference
-├── generation/      # Gemini API answer generation wrapper
+├── classifier/     # Rule-based intent/user-type classifier
+├── generation/      # Gemini API answer generation + citation parsing
 ├── routes/         # Flask API endpoints
 ├── db/             # MongoDB connection setup
-└── evaluation/     # RAGAS-based quantitative evaluation
+├── evaluation/     # RAGAS-based quantitative evaluation
+└── tests/          # pytest unit tests
 
-frontend/           # prototype.html (currently working UI) + Next.js scaffolding (Stage 7, not yet built)
-scripts/            # DB configuration & pipeline execution scripts
+frontend/           # Next.js (App Router) + TypeScript + Tailwind + next-intl --
+                     # see frontend/README-en.md for a full file-by-file breakdown
+scripts/            # currently empty placeholders (setup_db.py, run_pipeline.py) --
+                     # the actual pipeline scripts live under backend/pipeline/
 docs/               # Architecture deep-dives & evaluation reports
 ```
 
@@ -144,14 +147,15 @@ python app.py
 The API is served at http://localhost:5001. The first request is slow since
 the embedding/reranker models load lazily on first use.
 
-### 5. Open the UI
-The Next.js frontend (Stage 7) hasn't been built yet -- right now the only
-working UI is a self-contained static HTML/JS page,
-[`frontend/prototype.html`](frontend/prototype.html), that talks directly to
-the API above:
+### 5. Start the frontend
 ```bash
-open frontend/prototype.html   # or just double-click it in Finder
+cd frontend
+npm install
+npm run dev
 ```
+Open http://localhost:3000 (redirects to `/ko`). Details on the frontend's
+structure, next-intl setup, and known caveats are in
+[`frontend/README-en.md`](frontend/README-en.md).
 
 ## API Reference
 
