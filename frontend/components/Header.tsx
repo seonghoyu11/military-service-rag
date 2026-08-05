@@ -1,19 +1,25 @@
 "use client";
 
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
+
+import { usePathname, useRouter } from "@/i18n/routing";
 
 export default function Header({
   dark,
   onToggleDark,
-  showEnHint,
-  onTryEn,
 }: {
   dark: boolean;
   onToggleDark: () => void;
-  showEnHint: boolean;
-  onTryEn: () => void;
 }) {
   const t = useTranslations();
+  const locale = useLocale();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const switchLocale = (nextLocale: "ko" | "en") => {
+    if (nextLocale === locale) return;
+    router.replace(pathname, { locale: nextLocale });
+  };
 
   return (
     <div
@@ -123,54 +129,49 @@ export default function Header({
             }}
           >
             <div
+              className={locale === "ko" ? undefined : "dc-lang-pill"}
+              onClick={() => switchLocale("ko")}
               style={{
                 padding: "5px 13px",
                 borderRadius: 999,
                 fontSize: 12,
-                fontWeight: 700,
+                fontWeight: locale === "ko" ? 700 : 600,
                 background:
-                  "linear-gradient(180deg, rgba(46,64,102,0.95), rgba(20,33,58,0.95))",
-                color: "#FFFFFF",
+                  locale === "ko"
+                    ? "linear-gradient(180deg, rgba(46,64,102,0.95), rgba(20,33,58,0.95))"
+                    : "transparent",
+                color: locale === "ko" ? "#FFFFFF" : "var(--pill-inactive)",
                 boxShadow:
-                  "0 1px 3px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.25)",
+                  locale === "ko"
+                    ? "0 1px 3px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.25)"
+                    : "none",
+                cursor: "pointer",
               }}
             >
               {t("langToggle.ko")}
             </div>
             <div
-              className="dc-en-pill"
-              onClick={onTryEn}
+              className={locale === "en" ? undefined : "dc-lang-pill"}
+              onClick={() => switchLocale("en")}
               style={{
                 padding: "5px 13px",
                 borderRadius: 999,
                 fontSize: 12,
-                fontWeight: 600,
-                color: "var(--pill-inactive)",
+                fontWeight: locale === "en" ? 700 : 600,
+                background:
+                  locale === "en"
+                    ? "linear-gradient(180deg, rgba(46,64,102,0.95), rgba(20,33,58,0.95))"
+                    : "transparent",
+                color: locale === "en" ? "#FFFFFF" : "var(--pill-inactive)",
+                boxShadow:
+                  locale === "en"
+                    ? "0 1px 3px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.25)"
+                    : "none",
                 cursor: "pointer",
               }}
             >
               {t("langToggle.en")}
             </div>
-            {showEnHint && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 42,
-                  right: 0,
-                  background: "var(--hint-bg)",
-                  backdropFilter: "blur(10px)",
-                  WebkitBackdropFilter: "blur(10px)",
-                  color: "#fff",
-                  fontSize: 11,
-                  padding: "7px 11px",
-                  borderRadius: 8,
-                  whiteSpace: "nowrap",
-                  boxShadow: "0 6px 16px rgba(0,0,0,0.3)",
-                }}
-              >
-                {t("langToggle.enHint")}
-              </div>
-            )}
           </div>
         </div>
       </div>

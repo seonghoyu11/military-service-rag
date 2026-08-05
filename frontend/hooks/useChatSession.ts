@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
+import { useLocale } from "next-intl";
+
 import { queryApi } from "@/lib/api";
 import {
-  EN_HINT_MS,
   FAST_FORWARD_HOLD_MS,
   HIGHLIGHT_MS,
   STAGE_COUNT,
@@ -95,16 +96,15 @@ function reducer(state: InternalMessage[], action: Action): InternalMessage[] {
 }
 
 export function useChatSession() {
+  const locale = useLocale();
   const [messages, dispatch] = useReducer(reducer, [] as InternalMessage[]);
   const [input, setInput] = useState("");
   const [highlightedKey, setHighlightedKey] = useState<string | null>(null);
-  const [showEnHint, setShowEnHint] = useState(false);
   const [dark, setDark] = useState(false);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const stageTimers = useRef<Map<string, ReturnType<typeof setTimeout>[]>>(new Map());
   const finalizeTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  const enHintTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const scrollToBottom = useCallback(() => {
@@ -121,14 +121,14 @@ export function useChatSession() {
     });
     stageTimers.current.set(id, timers);
 
-    queryApi(question)
+    queryApi(question, undefined, locale)
       .then((raw) => {
         dispatch({ type: "SETTLED", id, result: { ok: true, viewModel: mapResponseToViewModel(raw) } });
       })
       .catch(() => {
         dispatch({ type: "SETTLED", id, result: { ok: false } });
       });
-  }, []);
+  }, [locale]);
 
   const submitText = useCallback(
     (question: string) => {
@@ -168,12 +168,6 @@ export function useChatSession() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.map((m) => m.status).join(",")]);
 
-  const tryEn = useCallback(() => {
-    setShowEnHint(true);
-    clearTimeout(enHintTimer.current);
-    enHintTimer.current = setTimeout(() => setShowEnHint(false), EN_HINT_MS);
-  }, []);
-
   const toggleDark = useCallback(() => setDark((d) => !d), []);
 
   const scrollToCard = useCallback((msgId: string, refIndex: number) => {
@@ -197,7 +191,6 @@ export function useChatSession() {
     return () => {
       stageTimersSnapshot.forEach((timers) => timers.forEach(clearTimeout));
       finalizeTimersSnapshot.forEach(clearTimeout);
-      clearTimeout(enHintTimer.current);
       clearTimeout(highlightTimer.current);
     };
   }, []);
@@ -210,8 +203,6 @@ export function useChatSession() {
     submitText,
     retry,
     highlightedKey,
-    showEnHint,
-    tryEn,
     dark,
     toggleDark,
     containerRef,

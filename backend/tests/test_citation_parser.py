@@ -145,3 +145,95 @@ def test_unmatchable_citation_gets_null_result_index_not_a_crash():
     # since it doesn't match any known law_name.
     segments = parse_citations("존재하지않는법 제5조에 따르면 그렇다.", results)
     assert all(s["type"] == "text" for s in segments)
+
+
+# EN-mode tests (language="en"). Regression story: an earlier EN system
+# instruction embedded the Korean "...에 따르면" trigger phrase verbatim
+# inside English sentences so this parser wouldn't need its own EN pattern
+# -- caught only once a human read a real answer and noticed "According to
+# X에 따르면" said "according to" twice, once per language. Fixed by giving
+# citation_parser.py a real "According to {law_name} Article {N}, Paragraph
+# {M}" pattern for language="en" instead (see _build_citation_pattern).
+def test_en_basic_citation_matches():
+    results = [{
+        "law_name": "병역법",
+        "article_no": "27",
+        "paragraph_no": "3",
+        "text": "...",
+        "score": 0.5,
+    }]
+    answer = (
+        "According to 병역법 Article 27, Paragraph 3, the permit may be revoked "
+        "if the person no longer meets the requirements."
+    )
+    segments = parse_citations(answer, results, "en")
+    citations = [s for s in segments if s["type"] == "citation"]
+    assert len(citations) == 1
+    assert citations[0]["law_name"] == "병역법"
+    assert citations[0]["article_no"] == "27"
+    assert citations[0]["paragraph_no"] == "3"
+    assert citations[0]["result_index"] == 0
+    # The Korean trigger phrase must never leak into an EN-mode text segment
+    # -- that would mean the EN pattern missed a citation the model actually
+    # wrote in the (wrong, KO-style) form.
+    for s in segments:
+        if s["type"] == "text":
+            assert "에 따르면" not in s["content"]
+
+
+def test_en_table_citation_has_no_article_paragraph_tail():
+    # 별표 (table) sources: law_name already embeds "별표 N" -- the EN
+    # pattern's Article/Paragraph tail is optional, mirroring the KO
+    # pattern's behavior for the same case (see module docstring).
+    results = [{
+        "law_name": "병역법 시행령 별표 3",
+        "article_no": "별표3",
+        "paragraph_no": "1",
+        "text": "...",
+        "score": 0.5,
+    }]
+    answer = "According to 병역법 시행령 별표 3, a permanent resident may receive a permit."
+    segments = parse_citations(answer, results, "en")
+    citations = [s for s in segments if s["type"] == "citation"]
+    assert len(citations) == 1
+    assert citations[0]["law_name"] == "병역법 시행령 별표 3"
+    assert citations[0]["article_no"] == "별표3"
+    assert citations[0]["result_index"] == 0
+
+
+def test_en_sub_article_reconstructs_korean_style_article_no():
+    # Source data always stores sub-articles in Korean-joiner form ("27의2"),
+    # regardless of answer language -- the EN prompt's "Article 27-2" must
+    # still resolve to that same internal representation to match `results`.
+    results = [{
+        "law_name": "병역법",
+        "article_no": "27의2",
+        "paragraph_no": "1",
+        "text": "...",
+        "score": 0.5,
+    }]
+    answer = "According to 병역법 Article 27-2, Paragraph 1, additional conditions apply."
+    segments = parse_citations(answer, results, "en")
+    citations = [s for s in segments if s["type"] == "citation"]
+    assert len(citations) == 1
+    assert citations[0]["article_no"] == "27의2"
+    assert citations[0]["result_index"] == 0
+
+
+def test_ko_mode_still_default_and_unaffected_by_en_pattern():
+    # language defaults to "ko" -- existing callers that don't pass it
+    # (e.g. evaluation/ragas_eval.py) must keep matching the Korean phrase,
+    # not the new English one.
+    results = [{
+        "law_name": "병역법",
+        "article_no": "27",
+        "paragraph_no": "3",
+        "text": "...",
+        "score": 0.5,
+    }]
+    answer = "병역법 제27조 제3항에 따르면 허가가 취소될 수 있습니다."
+    segments = parse_citations(answer, results)
+    citations = [s for s in segments if s["type"] == "citation"]
+    assert len(citations) == 1
+    assert citations[0]["article_no"] == "27"
+    assert citations[0]["paragraph_no"] == "3"

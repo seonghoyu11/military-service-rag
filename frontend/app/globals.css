@@ -38,7 +38,7 @@ body {
 /* Hover states ported from DutyCompass.dc.html's style-hover attributes
    (the DC runtime's per-element pseudo-class registration isn't available
    in plain React, so these live as regular CSS instead). */
-.dc-en-pill:hover {
+.dc-lang-pill:hover {
   background: var(--pill-hover-bg);
 }
 .dc-chip:hover {

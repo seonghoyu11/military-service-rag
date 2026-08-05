@@ -13,13 +13,14 @@ export class ApiError extends Error {
 export async function queryApi(
   question: string,
   sessionId?: string,
+  language?: string,
 ): Promise<QueryApiResponse> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}/api/query`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, session_id: sessionId }),
+      body: JSON.stringify({ question, session_id: sessionId, language }),
     });
   } catch (e) {
     throw new ApiError(

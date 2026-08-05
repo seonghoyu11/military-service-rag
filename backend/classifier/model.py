@@ -158,20 +158,68 @@ OUT_OF_SCOPE_KEYWORDS = [
     kw for category in OUT_OF_SCOPE_CATEGORIES.values() for kw in category["keywords"]
 ]
 
-OUT_OF_SCOPE_BASE_MESSAGE = (
-    "카투사/어학병 등 모집병 구체적 지원자격(TOEIC 점수 등)은 매년 병무청 모집공고로 정해져서, "
-    "이 챗봇의 법령 데이터베이스에는 포함되어 있지 않습니다."
-)
+# Every OUT_OF_SCOPE_* / POST_SERVICE_FALLBACK_MESSAGE string below is a
+# {"ko": ..., "en": ...} dict, keyed by the `language` param threaded through
+# classify() (see routes/query.py's `language` request field) -- classify()
+# indexes into these with the caller's language, defaulting to "ko" for any
+# unrecognized value. Category *keyword* matching (OUT_OF_SCOPE_CATEGORIES
+# above) stays Korean-only regardless of language -- only the user-facing
+# message text is localized, since incoming questions are still assumed to
+# be Korean (see Stage-EN-toggle scope decision: EN only changes output
+# language, not input-question parsing).
+OUT_OF_SCOPE_BASE_MESSAGE = {
+    "ko": (
+        "카투사/어학병 등 모집병 구체적 지원자격(TOEIC 점수 등)은 매년 병무청 모집공고로 정해져서, "
+        "이 챗봇의 법령 데이터베이스에는 포함되어 있지 않습니다."
+    ),
+    "en": (
+        "Specific application requirements for recruited-position tracks like KATUSA and "
+        "language specialists (TOEIC scores, etc.) are set every year by MMA recruitment "
+        "notices, not by statute -- so this chatbot's legal database doesn't cover them."
+    ),
+}
+
+# Appended to OUT_OF_SCOPE_BASE_MESSAGE when no category link matched at all
+# (_out_of_scope_message's no-links branch) vs. when at least one did (the
+# link-list intro right before the "- name: url" lines) -- two different
+# sentences pointing at the same mma.go.kr destination, so kept separate
+# rather than reusing one templated string.
+OUT_OF_SCOPE_NO_LINK_SUFFIX = {
+    "ko": " 정확한 기준은 병무청 홈페이지(mma.go.kr) 모집공고를 확인해 주세요.",
+    "en": " Please check the MMA website (mma.go.kr) recruitment notices for the exact criteria.",
+}
+
+OUT_OF_SCOPE_LINK_INTRO = {
+    "ko": " 정확한 기준은 아래 병무청 모집공고를 확인해 주세요.",
+    "en": " Please check the MMA recruitment notices below for the exact criteria.",
+}
+
+# English display labels for the "- {name}: {url}" link lines
+# _out_of_scope_message builds -- OUT_OF_SCOPE_CATEGORIES' keys stay Korean
+# (used for keyword matching above), this is display-only.
+OUT_OF_SCOPE_CATEGORY_LABELS_EN = {
+    "카투사": "KATUSA",
+    "어학병": "Language specialist (어학병)",
+    "모집병(기타)": "Other recruited positions (모집병)",
+}
 
 # 카투사 and 어학병 aren't the same thing (카투사 is its own recruitment field;
 # 어학병 is a language-specialty track run across several branches, KATUSA
 # included) -- surfacing both links without this note invites the user to
 # assume they're interchangeable or redundant.
-OUT_OF_SCOPE_KATUSA_LANGUAGE_RELATION_NOTE = (
-    "참고로 카투사와 어학병은 같은 게 아니에요 — 카투사는 별도 모집분야고, 어학병은 카투사를 "
-    "포함한 여러 군에서 운영하는 특기병 분류라서, 카투사 내에서 어학병으로 지원하는 것도 "
-    "가능합니다. 두 공고를 각각 확인해 보세요."
-)
+OUT_OF_SCOPE_KATUSA_LANGUAGE_RELATION_NOTE = {
+    "ko": (
+        "참고로 카투사와 어학병은 같은 게 아니에요 — 카투사는 별도 모집분야고, 어학병은 카투사를 "
+        "포함한 여러 군에서 운영하는 특기병 분류라서, 카투사 내에서 어학병으로 지원하는 것도 "
+        "가능합니다. 두 공고를 각각 확인해 보세요."
+    ),
+    "en": (
+        "By the way, KATUSA and language-specialist (어학병) tracks aren't the same thing -- "
+        "KATUSA is its own recruitment field, while 어학병 is a specialty classification run "
+        "across several branches including KATUSA, so applying as a language specialist "
+        "within KATUSA is also possible. Check both notices separately."
+    ),
+}
 
 # When a scope-excluded question (카투사 등) also names a user type we DO cover,
 # steer toward the adjacent thing we can actually answer: voluntary early
@@ -184,14 +232,25 @@ OUT_OF_SCOPE_RELATED_LOOKUP = {
     "article_no": "24",
 }
 
-OUT_OF_SCOPE_GUIDANCE_WITH_USER_TYPE = (
-    "다만 해외 거주 중인 {user_types}가 자진해서 조기 입영을 신청하는 절차는 안내해드릴 수 있어요 "
-    "(영주권자 등 입영희망신청제도, 관련 조항을 아래에 같이 보여드릴게요)."
-)
+OUT_OF_SCOPE_GUIDANCE_WITH_USER_TYPE = {
+    "ko": (
+        "다만 해외 거주 중인 {user_types}가 자진해서 조기 입영을 신청하는 절차는 안내해드릴 수 있어요 "
+        "(영주권자 등 입영희망신청제도, 관련 조항을 아래에 같이 보여드릴게요)."
+    ),
+    "en": (
+        "That said, we can walk you through the process for a {user_types} living abroad to "
+        "volunteer for early enlistment (the green-card-holder early enlistment application "
+        "program) -- we'll show the relevant articles below too."
+    ),
+}
 
-OUT_OF_SCOPE_GUIDANCE_GENERIC = (
-    "혹시 해외 거주 중 자진 입영이나 입영 시기 조정에 대해 궁금하신 거라면, 그 부분은 답변해드릴 수 있어요."
-)
+OUT_OF_SCOPE_GUIDANCE_GENERIC = {
+    "ko": "혹시 해외 거주 중 자진 입영이나 입영 시기 조정에 대해 궁금하신 거라면, 그 부분은 답변해드릴 수 있어요.",
+    "en": (
+        "If you're actually asking about volunteering for early enlistment or adjusting your "
+        "enlistment timing while living abroad, we can answer that part."
+    ),
+}
 
 # Project scope is "병역의무 발생 ~ 입영 전까지" (see docs/architecture.md) --
 # questions about life AFTER service (전역, 제대) are out of scope the same way
@@ -204,7 +263,14 @@ POST_SERVICE_KEYWORDS = [
     "갔다 온", "갔다온", "군대 다녀온", "복무를 마친", "복무 마친",
 ]
 
-POST_SERVICE_FALLBACK_MESSAGE = (
-    "이 챗봇은 '병역의무 발생 ~ 입영 전'까지의 절차만 다룹니다. 전역/제대 이후 사안은 "
-    "관할 지방병무청으로 문의해 주세요."
-)
+POST_SERVICE_FALLBACK_MESSAGE = {
+    "ko": (
+        "이 챗봇은 '병역의무 발생 ~ 입영 전'까지의 절차만 다룹니다. 전역/제대 이후 사안은 "
+        "관할 지방병무청으로 문의해 주세요."
+    ),
+    "en": (
+        "This chatbot only covers procedures from when your military-service obligation "
+        "begins up to before enlistment. For matters after discharge, please contact your "
+        "regional Military Manpower Administration office."
+    ),
+}

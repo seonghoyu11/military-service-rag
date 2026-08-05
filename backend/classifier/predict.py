@@ -3,7 +3,10 @@ from classifier.model import (
     TOPIC_KEYWORDS,
     OUT_OF_SCOPE_KEYWORDS,
     OUT_OF_SCOPE_CATEGORIES,
+    OUT_OF_SCOPE_CATEGORY_LABELS_EN,
     OUT_OF_SCOPE_BASE_MESSAGE,
+    OUT_OF_SCOPE_NO_LINK_SUFFIX,
+    OUT_OF_SCOPE_LINK_INTRO,
     OUT_OF_SCOPE_KATUSA_LANGUAGE_RELATION_NOTE,
     OUT_OF_SCOPE_RELATED_LOOKUP,
     OUT_OF_SCOPE_GUIDANCE_WITH_USER_TYPE,
@@ -22,7 +25,7 @@ def _detect_user_types(search_space):
     ]
 
 
-def _out_of_scope_message(search_space):
+def _out_of_scope_message(search_space, language="ko"):
     """Points to the specific MMA recruitment-notice page(s) the question
     matched, instead of a generic "go check mma.go.kr" shrug. Independently
     checks every category (not if/elif), so a question mentioning multiple
@@ -34,14 +37,20 @@ def _out_of_scope_message(search_space):
     ]
 
     if not links:
-        return f"{OUT_OF_SCOPE_BASE_MESSAGE} 정확한 기준은 병무청 홈페이지(mma.go.kr) 모집공고를 확인해 주세요."
+        return OUT_OF_SCOPE_BASE_MESSAGE[language] + OUT_OF_SCOPE_NO_LINK_SUFFIX[language]
 
-    link_lines = "\n".join(f"- {name}: {url}" for name, url in links)
-    message = f"{OUT_OF_SCOPE_BASE_MESSAGE} 정확한 기준은 아래 병무청 모집공고를 확인해 주세요.\n{link_lines}"
+    if language == "en":
+        link_lines = "\n".join(
+            f"- {OUT_OF_SCOPE_CATEGORY_LABELS_EN.get(name, name)}: {url}" for name, url in links
+        )
+    else:
+        link_lines = "\n".join(f"- {name}: {url}" for name, url in links)
+
+    message = OUT_OF_SCOPE_BASE_MESSAGE[language] + OUT_OF_SCOPE_LINK_INTRO[language] + f"\n{link_lines}"
 
     matched_names = {name for name, _ in links}
     if {"카투사", "어학병"} <= matched_names:
-        message += f"\n\n{OUT_OF_SCOPE_KATUSA_LANGUAGE_RELATION_NOTE}"
+        message += f"\n\n{OUT_OF_SCOPE_KATUSA_LANGUAGE_RELATION_NOTE[language]}"
 
     return message
 
@@ -57,7 +66,7 @@ def _detect_anchor_lookups(search_space):
     ]
 
 
-def classify(question, session_user_type=None):
+def classify(question, session_user_type=None, language="ko"):
     """
     Rule-based intent classification for an incoming user question.
     Returns user_type_tags/topic_tags (same vocabulary as pipeline/tagger.py,
@@ -71,7 +80,18 @@ def classify(question, session_user_type=None):
     a pure UX convenience (skip re-typing "저는 영주권자인데..." every time);
     it doesn't feed into retrieval ranking at all (see routes/query.py), only
     the OOS message and the intent tags shown to the user.
+
+    language: "ko" or "en" (defaults to "ko" for anything else) -- selects
+    which language the *fallback_message* strings below are composed in.
+    Only affects output message text: `search_space` keyword matching stays
+    Korean-only regardless (incoming questions are still assumed Korean; see
+    classifier/model.py's OUT_OF_SCOPE_* dicts for why). user_type_tags/
+    topic_tags themselves are also unaffected -- they're classification
+    labels, not user-facing prose.
     """
+    if language not in ("ko", "en"):
+        language = "ko"
+
     search_space = question.lower()
     session_fallback = [session_user_type] if session_user_type else []
 
@@ -84,7 +104,7 @@ def classify(question, session_user_type=None):
             "user_type_tags": _detect_user_types(search_space) or session_fallback,
             "topic_tags": [],
             "out_of_scope": True,
-            "fallback_message": POST_SERVICE_FALLBACK_MESSAGE,
+            "fallback_message": POST_SERVICE_FALLBACK_MESSAGE[language],
             "related_lookup": None,
             "anchor_lookups": [],
         }
@@ -93,19 +113,19 @@ def classify(question, session_user_type=None):
         user_type_tags = _detect_user_types(search_space) or session_fallback
 
         if user_type_tags:
-            guidance = OUT_OF_SCOPE_GUIDANCE_WITH_USER_TYPE.format(
+            guidance = OUT_OF_SCOPE_GUIDANCE_WITH_USER_TYPE[language].format(
                 user_types="/".join(user_type_tags)
             )
             related_lookup = OUT_OF_SCOPE_RELATED_LOOKUP
         else:
-            guidance = OUT_OF_SCOPE_GUIDANCE_GENERIC
+            guidance = OUT_OF_SCOPE_GUIDANCE_GENERIC[language]
             related_lookup = None
 
         return {
             "user_type_tags": user_type_tags,
             "topic_tags": [],
             "out_of_scope": True,
-            "fallback_message": f"{_out_of_scope_message(search_space)}\n\n{guidance}",
+            "fallback_message": f"{_out_of_scope_message(search_space, language)}\n\n{guidance}",
             "related_lookup": related_lookup,
             "anchor_lookups": [],
         }

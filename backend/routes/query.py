@@ -48,10 +48,16 @@ ANCHOR_BOOST = 0.3
 # hiding results on this signal would suppress more legitimate weak-signal
 # answers than it filters actual noise. See docs/eval_results.md (issue 2).
 LOW_CONFIDENCE_THRESHOLD = 0.05
-LOW_CONFIDENCE_NOTICE = (
-    "검색 결과의 확신도가 낮습니다. 질문을 더 구체적으로 작성하시거나 표현을 바꿔서 "
-    "다시 시도해 보세요. 아래 결과는 참고용입니다."
-)
+LOW_CONFIDENCE_NOTICE = {
+    "ko": (
+        "검색 결과의 확신도가 낮습니다. 질문을 더 구체적으로 작성하시거나 표현을 바꿔서 "
+        "다시 시도해 보세요. 아래 결과는 참고용입니다."
+    ),
+    "en": (
+        "The search results have low confidence. Try rephrasing your question or making it "
+        "more specific. The results below are for reference only."
+    ),
+}
 
 
 def _apply_directional_boost(reranked, intent_topic_tags):
@@ -129,7 +135,7 @@ def _session_user_type(session_id):
     return doc.get("user_type") if doc else None
 
 
-def answer_question(question, session_user_type=None):
+def answer_question(question, session_user_type=None, language="ko"):
     """
     Classifies the question, returns the top-ranked law chunks (hybrid
     retrieval + reranker), and -- when confident enough -- a Gemini-generated
@@ -138,8 +144,18 @@ def answer_question(question, session_user_type=None):
     Pulled out of the /api/query view (Stage 6) so RAGAS evaluation
     (evaluation/ragas_eval.py) can call the exact same production code path
     directly, without going through HTTP or reimplementing any of this.
+
+    language: "ko" or "en" (anything else falls back to "ko") -- the EN
+    toggle's output language. Only changes which language fixed strings
+    (LOW_CONFIDENCE_NOTICE, classify()'s fallback_message) and the Gemini-
+    generated answer come back in; retrieval/reranking/boosts are entirely
+    language-independent (see generation/answer.py and classifier/model.py
+    for where the actual localized strings live).
     """
-    intent = classify(question, session_user_type=session_user_type)
+    if language not in ("ko", "en"):
+        language = "ko"
+
+    intent = classify(question, session_user_type=session_user_type, language=language)
     if intent["out_of_scope"]:
         related_scope_info = None
         lookup = intent.get("related_lookup")
@@ -211,7 +227,7 @@ def answer_question(question, session_user_type=None):
     answer_error = None
     if not low_confidence and results:
         try:
-            answer = generate_answer(question, results)
+            answer = generate_answer(question, results, language=language)
         except Exception as e:
             print(f"[answer_error] query={question!r} error={e!r}", file=sys.stderr)
             answer_error = f"{type(e).__name__}: {e}"
@@ -232,7 +248,7 @@ def answer_question(question, session_user_type=None):
     # and keeps any future citation-format changes (e.g. the 별표 special
     # case) in one place instead of two. `answer` is left untouched for
     # debugging/logging; this is purely additive.
-    answer_segments = parse_citations(answer, results) if answer else None
+    answer_segments = parse_citations(answer, results, language) if answer else None
 
     return {
         "out_of_scope": False,
@@ -240,7 +256,7 @@ def answer_question(question, session_user_type=None):
         "results": results,
         "related_scope_info": None,
         "low_confidence": low_confidence,
-        "low_confidence_notice": LOW_CONFIDENCE_NOTICE if low_confidence else None,
+        "low_confidence_notice": LOW_CONFIDENCE_NOTICE[language] if low_confidence else None,
         "answer": answer,
         "answer_segments": answer_segments,
         "answer_error": answer_error,
@@ -256,5 +272,8 @@ def query():
 
     session_id = (data.get("session_id") or "").strip()
     session_user_type = _session_user_type(session_id)
+    language = data.get("language") if data.get("language") in ("ko", "en") else "ko"
 
-    return jsonify(answer_question(question, session_user_type=session_user_type))
+    return jsonify(
+        answer_question(question, session_user_type=session_user_type, language=language)
+    )

@@ -473,9 +473,52 @@ Playwright 헤드리스 브라우저로 실제 검증: 카투사 질문에서 �
 상세 검증 로그와 스크린샷 설명은 `docs/eval_results.md` "Stage 7 후속"
 참고.
 
+## 9단계: EN 토글 실제 동작 구현 — 영문 답변 생성 (2026-08-05)
+
+7단계에서 next-intl 라우팅만 잡아두고 EN 버튼은 "준비 중" 툴팁
+스텁이었던 걸, 실제로 (1) UI 전체 영문화 (2) Gemini 답변 본문 영어
+생성 (3) 법조문 인용은 한국어 원문 유지, 세 가지가 동작하도록
+만들었다.
+
+`language` 파라미터를 `answer_question()` → `classify()` →
+`generate_answer()`로 배선하고, 백엔드 고정 문자열(OOS 안내, 저신뢰
+안내)은 전부 `{"ko":..., "en":...}` 딕셔너리로 통일했다.
+
+프론트는 `Header.tsx`가 next-intl의 `useRouter`/`usePathname`으로
+실제 locale 전환(`router.replace(pathname, {locale})`)을 하도록
+바꾸고, 기존 "준비 중" 스텁 메커니즘(`showEnHint`/`tryEn`/
+`EN_HINT_MS`)은 완전히 제거했다. `messages/en.json`도 지금까지
+`ko.json` 복사본이던 걸 실제 영문으로 교체.
+
+가장 까다로웠던 건 `citation_parser.py`가 한국어 정규식 트리거
+("...에 따르면")로 답변을 파싱한다는 점이었고, 여기서 두 번
+잘못짚었다. 1차: 영문 답변이 이 문구를 "알아서" 재현해줄 거라
+기대하지 않고 EN system instruction에 "이 정확한 한국어 문구를
+영어 문장 속에 그대로 넣어라"라고 못박았다 — 파싱은 잘 됐지만
+실제 답변을 읽어보니 `"According to X에 따르면"`처럼 "according
+to"를 두 언어로 중복 표기하고 있었다. 2차: 영어 전치사 없이
+"X에 따르면, ..."로 문장을 바로 시작하게 고쳤는데, 사용자가 다시
+지적 — "영어 버전이면 according to만 있고 '~따르면'은 아예 있으면
+안 된다"는 게 진짜 요구사항이었다. 결국 `citation_parser.py`에
+EN 전용 정규식("According to {법령명} Article N, Paragraph M")을
+새로 추가하고 system instruction도 "에 따르면"을 EN 답변에서
+완전히 금지하는 쪽으로 다시 썼다. 두 번 다 파싱 자체는 처음부터
+문제없었고, 실패는 항상 "파싱은 되지만 스펙과 다른 문장" 쪽이었다
+— 자동 검증만으로는 못 잡고 사람이 실제 답변을 읽어야 잡히는
+종류의 문제였다.
+
+검증 도중 MongoDB Atlas 연결이 TLS 핸드셰이크 단계에서 통째로
+막히는 일도 있었다(작업과 무관한 인프라 이슈 — IP 허용 목록 갱신
+후 해결). 그 전까지 Mongo가 필요 없는 부분(`classify()` 언어 분기,
+pytest, 프론트 tsc/eslint/vitest)부터 먼저 확인해두고, 연결 복구
+후 EN 정상(별표 출처·일반 조항 출처 둘 다)/low_confidence/
+out_of_scope + 같은 질문 KO 회귀를 실제 HTTP로, EN 토글 버튼
+자체는 Playwright로 마저 확인했다 — 전부 정상, 콘솔 에러 0건.
+상세 내용은 `docs/eval_results.md` "Stage 9" 참고.
+
 ## 진행 상황 요약
 
-1~8단계 전부 완료. 단계별 상세 내용은 위 각 섹션 및 `docs/eval_results.md` 참고.
+1~9단계 전부 완료. 단계별 상세 내용은 위 각 섹션 및 `docs/eval_results.md` 참고.
 
 ## 남은 과정
 
@@ -483,8 +526,6 @@ Playwright 헤드리스 브라우저로 실제 검증: 카투사 질문에서 �
   것까지 확인됨. 남은 선택지는 후보 풀 크기 축소(이슈 1 정확도 수정과
   트레이드오프 재검토 필요)나 `device="mps"` 전환(메모리 압박 우려로
   CPU를 택했던 원래 결정 재검토 필요) — 아직 손 안 댐.
-- **next-intl 실제 영문 번역**: 7단계에서 라우팅 구조는 잡아뒀지만
-  `messages/en.json`은 아직 `ko.json` 그대로 복사된 상태 — 실제 번역 작업 남음.
 - **`messages/ko.json` 검수**: 포팅 원본의 한글 텍스트가 인코딩 깨짐
   상태로 전달돼서 패턴 매칭으로 역추정 복원한 문자열이 다수 — 한 번
   검수 권장.

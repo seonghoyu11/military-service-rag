@@ -570,9 +570,57 @@ behavior shows no regression -- zero console errors across the board.
 verification log and screenshot notes are in the "Stage 7 follow-up"
 section of `docs/eval_results-en.md`.
 
+## Stage 9: making the EN toggle actually work -- English answer generation (2026-08-05)
+
+Stage 7 only got as far as scaffolding next-intl's routing; the EN
+button itself was a "coming soon" tooltip stub. This round made three
+things actually happen: (1) the whole UI switches language, (2) the
+Gemini-generated answer body comes back in English, (3) article
+citations stay in their original Korean form either way.
+
+Threaded a `language` parameter through `answer_question()` ->
+`classify()` -> `generate_answer()`, and unified every fixed backend
+string (OOS notice, low-confidence notice) into `{"ko": ..., "en": ...}`
+dicts.
+
+On the frontend, `Header.tsx` now does a real locale switch via
+next-intl's `useRouter`/`usePathname` (`router.replace(pathname,
+{locale})`), and the old "coming soon" stub machinery
+(`showEnHint`/`tryEn`/`EN_HINT_MS`) was removed entirely.
+`messages/en.json`, previously just a copy of `ko.json`, is now real
+English.
+
+The hardest part was `citation_parser.py`, which parses answers using a
+Korean regex trigger ("...에 따르면") -- and it took two wrong turns to
+get right. Attempt 1: rather than hoping an English answer would
+"naturally" reproduce that phrase, the EN system instruction mandated
+embedding the exact Korean phrase verbatim inside English sentences.
+Parsing worked, but reading an actual answer showed `"According to
+X에 따르면"` -- "according to" said twice, once per language. Attempt 2:
+dropped the English preposition and had sentences start directly with
+"X에 따르면, ..." -- no more duplication, but the user pointed out
+something more basic: an English answer should have *only* "according
+to," with no "에 따르면" at all, full stop. So `citation_parser.py`
+got a real English pattern ("According to {law name} Article N,
+Paragraph M") and the system instruction now bans the Korean phrase
+from English answers entirely. Both times, parsing itself was fine from
+the start -- the actual failures were about prose matching spec, which
+only showed up once a human read the output.
+
+Mid-verification, MongoDB Atlas connectivity dropped out entirely at the
+TLS handshake level (an infrastructure issue unrelated to this work --
+resolved once the user updated the IP allowlist). Checked everything
+that didn't need Mongo first (`classify()`'s language branching, pytest,
+frontend tsc/eslint/vitest), then once the connection was back, verified
+EN normal (both a table source and an ordinary-article source)/
+low_confidence/out_of_scope plus the same questions in KO as a
+regression check over real HTTP, and the EN toggle button itself via
+Playwright -- all clean, zero console errors. Full details in the
+"Stage 9" section of `docs/eval_results-en.md`.
+
 ## Progress summary
 
-Stages 1-8 are all done. See each stage's section above and
+Stages 1-9 are all done. See each stage's section above and
 `docs/eval_results-en.md` for details.
 
 ## What's left
@@ -582,9 +630,6 @@ Stages 1-8 are all done. See each stage's section above and
   (requires revisiting the tradeoff against the issue-1 accuracy fix) or
   switching to `device="mps"` (revisiting the original CPU choice, made
   over memory-pressure concerns) -- neither attempted yet.
-- **Real next-intl English translations**: the routing structure is in
-  place from Stage 7, but `messages/en.json` is still a literal copy of
-  `ko.json` -- actual translation work remains.
 - **A proofread pass on `messages/ko.json`**: the Korean text in the porting
   source arrived with corrupted encoding, so a number of strings were
   reconstructed via pattern-matching -- worth a review.

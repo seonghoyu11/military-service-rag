@@ -25,6 +25,7 @@
 - [Stage 8: `/api/query` 응답 지연 진단 — 재랭커가 진짜 병목 (2026-08-04)](#stage-8-apiquery-응답-지연-진단--재랭커가-진짜-병목-2026-08-04)
 - [Stage 8 후속: reranker 배치/스레드 튜닝 시도 — 개선 없음 (2026-08-04)](#stage-8-후속-reranker-배치스레드-튜닝-시도--개선-없음-2026-08-04)
 - [Stage 7 후속: OOS 응답 화면 수정 2건 (2026-08-04)](#stage-7-후속-oos-응답-화면-수정-2건-2026-08-04)
+- [Stage 9: EN 토글 실제 동작 구현 — 영문 답변 생성 (2026-08-05)](#stage-9-en-토글-실제-동작-구현--영문-답변-생성-2026-08-05)
 
 ## 1단계: 데이터 파싱 검증 (2026-07-09)
 
@@ -1907,3 +1908,228 @@ rel="noopener noreferrer">`로 렌더링. `OosCard.tsx`의 메시지 컨테이�
 `relatedScopeInfo` 토글은 기존 `EvidenceToggleButton`을 네임스페이스
 파라미터화해서 재사용했고, `low_confidence`의 "항상 펼침" 설계와는
 의도적으로 다르다는 점을 주석으로 남겨뒀다.
+
+## Stage 9: EN 토글 실제 동작 구현 — 영문 답변 생성 (2026-08-05)
+
+### 배경
+
+Stage 7에서 next-intl 라우팅(`/ko`, `/en`)만 스캐폴딩해두고 EN 버튼은
+"영문 버전은 준비 중이에요" 툴팁만 띄우는 스텁이었다. 이번엔 실제로
+버튼을 누르면 (1) UI 전체가 영문화되고 (2) Gemini 생성 답변 본문이
+영어로 나오되 (3) 법조문 인용(법령명·조번호·항번호)은 한국어 원문
+그대로 유지되도록 만드는 작업. 스코프는 미리 정해져서 받았다 —
+UI 문구/답변 본문/고정 백엔드 메시지(OOS·저신뢰 안내)까지가 번역
+대상이고, 법조문 인용 자체와 `related_scope_info`의 조항 원문
+(`text`/`article_title`)은 번역 대상에서 제외.
+
+### 설계 1: `language` 파라미터를 파이프라인 전체에 배선
+
+`routes/query.py`의 `answer_question(question, session_user_type=None,
+language="ko")` → `classify(question, session_user_type, language)` →
+`generate_answer(question, results, language)` 순으로 스레딩. `/api/query`
+뷰는 요청 body의 `language`가 `"ko"`/`"en"`이 아니면 무조건 `"ko"`로
+폴백 — 기존 호출부(RAGAS 평가 스크립트 등)는 파라미터를 안 주면 그대로
+한국어 경로를 타서 회귀가 없다.
+
+고정 문자열들(`classifier/model.py`의 `OUT_OF_SCOPE_*`/
+`POST_SERVICE_FALLBACK_MESSAGE`, `routes/query.py`의
+`LOW_CONFIDENCE_NOTICE`)은 전부 `{"ko": ..., "en": ...}` 딕셔너리로
+바꿔서 `[language]`로 인덱싱하는 패턴으로 통일했다. `search_space`
+키워드 매칭(카투사/어학병 등 판별)은 언어와 무관하게 한국어 그대로 —
+들어오는 질문 자체는 여전히 한국어로 가정한다(EN 토글은 출력 언어만
+바꾼다는 스코프 결정). `user_type_tags`/`topic_tags`도 분류 라벨이라
+번역 대상이 아니고, EN 안내 문구의 `{user_types}` 자리엔 그대로
+한국어 태그("영주권자" 등)가 들어간다 — 법조문 인용과 같은 맥락의
+의도적 선택.
+
+### 설계 2: citation_parser 언어 호환성 — 두 번의 시도 끝에 정착한 설계
+
+`generation/citation_parser.py`는 원래 `"{law_name}...에 따르면"`이라는
+**한국어** 정규식 트리거 하나로만 답변을 파싱했다. 이걸 영문 모드에서
+어떻게 다룰지, 실제로는 세 단계를 거쳤다.
+
+**1차 시도(폐기)**: 영문 답변이 이 패턴을 "자연스럽게" 재현해줄 거라고
+낙관하는 대신, EN system instruction에 한국어 트리거 문구를 그대로
+박아넣었다 — "영어 문장 안에 '제N조 제M항에 따르면'을 한국어 그대로
+유지하라"는 지시. 실측해보니 citation_parser는 수정 없이 그대로
+동작했지만(6개 인용 전부 정상 파싱), 실제 답변을 사람이 읽어보니
+`"According to 병역법 시행령 별표 3에 따르면, ..."`처럼 나오고 있었다 —
+"에 따르면"이 이미 "according to"라는 뜻인데 영어 "According to"까지
+붙어서 의미가 두 언어로 중복되는 문장이었다.
+
+**2차 시도(임시방편, 이것도 폐기)**: "에 따르면"을 문장 리드인 전체로
+간주하고 앞에 영어 전치사를 붙이지 말라고 명시 — "병역법 제27조
+제3항에 따르면, the permit may be revoked..."처럼 영어 문장이 한국어
+"에 따르면"으로 시작하는 형태. citation_parser 파싱은 여전히 정상이었고
+중복은 사라졌지만, 사용자가 다시 확인 — "영어 버전이면 according to만
+있고 '~따르면'은 아예 있으면 안 된다"는 게 실제 요구사항이었다. 즉
+"에 따르면"을 영문 답변에서 완전히 빼야 했다.
+
+**최종 설계**: `citation_parser.py`에 EN 전용 정규식을 별도로 추가하는
+쪽으로 방향을 바꿨다. `_build_citation_pattern(law_names, language)`가
+언어별로 다른 트리거를 매칭:
+
+- KO(기존): `"{law_name}(제{N}조(의{sub})?( 제{M}항)?)?에 따르면"`
+- EN(신규): `"According to {law_name}( Article {N}(-{sub})?(, Paragraph {M})?)?"`
+
+`generate_answer()`의 EN system instruction(`_CITATION_RULE["en"]`)도
+다시 썼다 — 이제 한국어 "에 따르면"/"제N조"/"제M항"은 EN 답변에
+아예 등장하면 안 된다고 명시하고, "According to {law name} Article
+{N}, Paragraph {M}, ..." 형식을 요구한다. 법령명(`{law name}`)만은
+여전히 한국어 원문 그대로 유지 — 이건 처음부터 변하지 않은 요구사항.
+별표(표) 출처는 Article/Paragraph 없이 `"According to {law_name}, ..."`
+로 끝나는 것도 한국어 버전의 별표 처리와 대칭.
+
+한국어/영어 두 system instruction은 그라운딩 규칙(근거 밖 내용 금지),
+정보 부족 시 대응 문구, 인용 형식 규칙을 각각 `_GROUNDING_RULE`/
+`_INSUFFICIENT_INFO_RULE`/`_CITATION_RULE` dict(ko/en 쌍)로 추출해서
+공유하고, `SYSTEM_INSTRUCTION_KO`/`SYSTEM_INSTRUCTION_EN`이 이걸
+조립하는 구조로 짜서 중복을 줄였다. `routes/query.py`의
+`parse_citations(answer, results, language)` 호출도 language를
+같이 넘기도록 배선.
+
+`tests/test_citation_parser.py`에 EN 케이스 4개 추가(기본 인용,
+별표 인용 — Article/Paragraph 없음, 하위조번호 "27의2" ↔ "Article
+27-2" 왕복 재구성, KO 기본 동작 회귀) — 9/9 통과.
+
+### 설계 3: EN 토글 버튼을 실제 locale 전환으로 교체
+
+`components/Header.tsx`가 next-intl의 `useLocale()`/`useRouter()`/
+`usePathname()`(`i18n/routing.ts`가 이미 노출해두고 있었음)을 써서
+KO/EN 필 클릭 시 `router.replace(pathname, {locale})`로 실제
+페이지를 전환하도록 바꿨다. 기존 "준비 중" 스텁 메커니즘
+(`showEnHint`/`tryEn`/`EN_HINT_MS`, `langToggle.enHint` 메시지 키)은
+전부 제거 — `hooks/useChatSession.ts`, `components/ChatApp.tsx`,
+`lib/constants.ts`, `messages/{ko,en}.json`에서 관련 코드/키를 정리했다.
+`lib/api.ts`의 `queryApi()`에 `language` 인자를 추가하고,
+`useChatSession`이 `useLocale()`로 얻은 현재 로케일을 그대로 넘긴다.
+
+### 설계 4: `messages/en.json` 실번역
+
+지금까지 `ko.json`을 그대로 복사해둔 상태였던 걸 전부 실제 영문으로
+교체 — 헤더/디스클레이머/로딩 단계명/근거·관련 조항 토글 문구/샘플
+질문 3개/입력창 placeholder 등. 디스클레이머의 "병무청(1588-9090)"은
+실제 국제전화 상황을 감안해 "+82-1588-9090"으로 국가번호를 붙였다.
+
+### 검증 1: MongoDB Atlas 연결 장애 (작업과 무관, 중간에 발생)
+
+실측 검증 도중 `/api/query`가 500을 반환 — 로그 확인 결과 MongoDB
+Atlas와의 TLS 핸드셰이크 자체가 `TLSV1_ALERT_INTERNAL_ERROR`로
+실패하고 있었다. pymongo를 거치지 않고 순수 `ssl` 소켓으로 Atlas
+호스트에 직접 붙여봐도 동일하게 실패해서 코드 문제가 아니라
+네트워크/Atlas 접근 목록 쪽 문제로 판단, 사용자에게 보고하고 대기.
+사용자가 IP 허용 목록을 갱신한 뒤 재시도하니 정상 연결됐다 — 이
+세션의 EN 기능 자체와는 무관한 사이드 이슈였지만, 검증이 중간에
+한 번 끊겼다는 기록으로 남겨둔다.
+
+### 검증 2: `classify()` 언어 분기 단위 테스트 (Mongo 불필요, 먼저 확인)
+
+Mongo 연결과 무관한 부분부터 직접 호출로 확인:
+- KO 기본값(파라미터 없음) vs KO 명시 — 완전 동일(회귀 없음)
+- EN: 카투사 단독/유저타입 미감지/카투사+어학병 조합(관계 안내
+  문구 포함)/POST_SERVICE — 전부 자연스럽게 영문화, MMA URL은 원본
+  그대로
+- 잘못된 language 값(`"fr"`) → `"ko"` 폴백 확인
+- in-scope 질문은 language와 무관하게 `user_type_tags`/`topic_tags`
+  동일 확인
+- `python3 -m pytest tests/` 5개, 프론트 `tsc --noEmit`/`eslint`/
+  `vitest`(19/19) 전부 통과
+
+### 검증 3: EN 정상/low_confidence/out_of_scope 실제 HTTP 왕복
+
+클린 재시작 후 `/api/query`를 실제로 호출(Mongo 복구 후):
+
+- **정상 답변, 별표 출처** ("영주권자인데 국외여행허가 어떻게
+  받나요?", `language: "en"`) — 최종 설계 반영 후:
+  ```
+  According to 병역법 시행령 별표 3, among those subject to 병역준비역,
+  social service personnel convocation (사회복무요원 소집대상), ... a
+  person who has obtained foreign permanent residency (영주권등) and
+  has continuously resided in that country for less than 3 years can
+  receive an overseas travel permit or permit extension once within a
+  3-year scope, ...
+  ```
+  "에 따르면" 없이 "According to {law_name}, ..."로 바로 시작(별표라
+  Article/Paragraph 없음) — `answer_segments` citation 4개 전부 정상
+  파싱.
+- **정상 답변, 일반 조항 출처** ("유학 중인데 휴학하면 입영연기가
+  취소되나요", `language: "en"`) — 공백 포함 법령명("병역의무자
+  국외여행 업무처리 규정")과 일반 조항(제N조/제M항) 둘 다 확인:
+  ```
+  According to 병역의무자 국외여행 업무처리 규정 Article 27, Paragraph 3,
+  if a person who received overseas travel permission for the purpose
+  of studying abroad fails to maintain the permission requirements ...
+  ```
+  citation 3개 전부 `law_name`/`article_no`("27")/`paragraph_no`("3")
+  정확히 파싱 — 공백 있는 법령명도 KO 모드와 동일하게 정상 매칭됨을
+  확인.
+- **low_confidence** ("미국 영주권 받은 지 2년밖에 안 됐는데",
+  `language: "en"`): `low_confidence_notice`가 영문으로 정상 반환
+  ("The search results have low confidence. ..."), `answer: null`
+  (기존 설계대로 `generate_answer()` 자체를 안 부름).
+- **out_of_scope** ("카투사 지원하고 싶은데 영주권자도 되나요?",
+  `language: "en"`): `message`가 영문으로 조립되고 MMA URL은 원본
+  그대로, `related_scope_info`의 조항 텍스트(`text`)는 번역 없이
+  한국어 원문 그대로 내려옴(설계대로).
+
+### 검증 4: 동일 질문 3개 KO 회귀
+
+같은 3개 질문을 `language: "en"` 대신 `"ko"`(또는 생략)로 재실행 —
+답변/문구가 기존과 동일한 형태(한국어 답변, 한국어 안내 문구)로
+나오는 것을 확인. 회귀 없음.
+
+### 검증 5: Playwright로 EN 토글 버튼 실제 UI 확인
+
+프론트 `/ko`에서 EN 필 클릭 → `/en`으로 실제 네비게이션 확인, 헤더/
+디스클레이머/empty-state 안내문/샘플 질문 3개/입력창 placeholder가
+전부 영문으로 스왑되는 것을 스크린샷으로 확인. "영문 버전은 준비
+중이에요" 텍스트는 0건(스텁 완전히 제거됨) 확인. EN 상태에서 KO 필
+클릭 → `/ko`로 복귀, 한국어 UI 정상 복원 확인. 콘솔 에러 0건.
+
+### 발견 및 재설계: EN 인용 문구가 두 번 잘못 나왔다
+
+검증 3(1차 버전)의 실제 답변을 사용자가 직접 읽어보고서야 문제를
+잡아냈다 — 두 번.
+
+1. 1차: `"According to 병역법 시행령 별표 3에 따르면, ..."` — "에
+   따르면"이 이미 "according to"라는 뜻인데 영어 "According to"까지
+   붙어서 의미가 두 언어로 중복. 원인은 `_CITATION_RULE["en"]`에 직접
+   써둔 예시가 `"Under 병역법 제27조 제3항에 따르면, ..."`이었던 것 —
+   "Under"도 "~에 따르면"과 겹치는데, Gemini가 이걸 그대로 일반화해서
+   "According to"로 바꿔 쓴 것.
+2. 1차 수정(영어 전치사 없이 "병역법 ...에 따르면, ..."로 문장을
+   바로 시작하도록 고침)으로 중복은 없앴지만, 이번엔 사용자가 더
+   근본적인 문제를 지적했다 — "영어 버전이면 according to만 있고
+   '~따르면'은 아예 있으면 안 된다"는 게 애초 요구사항이었다는 것.
+   즉 "에 따르면" 자체가 영문 답변에 남아있는 게 잘못이었다 — 단순히
+   중복만 없앤다고 될 문제가 아니라, EN 인용 형식 자체를 다시
+   설계해야 했다.
+
+최종적으로 `citation_parser.py`에 EN 전용 정규식(`"According to
+{law_name} Article {N}, Paragraph {M}"`)을 새로 추가하고
+`_CITATION_RULE["en"]`도 "에 따르면"/"제N조"/"제M항"을 EN 답변에서
+아예 금지하는 방향으로 다시 썼다(설계 2 참고). 백엔드 재시작 후
+별표 출처 질문 + 일반 조항 출처 질문(공백 포함 법령명 포함) 둘 다
+재실행해서 `"According to {law_name}..."` 형식으로 나오고 "에
+따르면"이 전혀 안 남는 것, `answer_segments`가 여전히 정상
+파싱되는 것 확인(위 검증 3 최종 버전).
+
+이 과정에서 배운 것: **자동화된 검증(citation_parser가 파싱에
+성공하는지)은 "파싱은 되지만 어색하거나 스펙과 다른 문장"까지는
+걸러내지 못한다.** 두 번 모두 citation_parser 파싱 자체는
+처음부터 끝까지 정상이었고, 실제 실패는 산문 품질/스타일 쪽이었다
+— 사람이 실제 답변을 읽어보고 나서야 잡힌 문제였다.
+
+### 결론
+
+EN 토글이 스텁에서 실제 기능으로 전환됐다 — locale 전환(프론트),
+답변 생성 언어 분기(백엔드 Gemini), 고정 메시지 언어 분기(백엔드),
+citation 파싱 언어 호환성까지 전부 실측으로 검증했다. citation
+형식은 세 번의 반복(한국어 문구를 영어 문장에 강제 삽입 → 중복만
+제거 → EN 전용 파싱 규칙 신설) 끝에 정착했는데, 처음부터 "LLM이
+알아서 자연스럽게 맞춰줄 것"이라 낙관하지 않고 매번 system
+instruction에 정확한 형식을 못박은 접근 자체는 유효했다 — 문제는
+그 형식 자체가 두 번 부적절했던 것이지, 명시적으로 못박는 전략이
+틀린 게 아니었다. 중간에 겪은 MongoDB Atlas 연결 장애는 이번
+기능과 무관한 인프라 이슈였고 사용자의 IP 허용 목록 갱신으로
+해결됐다.

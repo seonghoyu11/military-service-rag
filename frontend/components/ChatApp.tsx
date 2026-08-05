@@ -16,8 +16,6 @@ export default function ChatApp() {
     submitText,
     retry,
     highlightedKey,
-    showEnHint,
-    tryEn,
     dark,
     toggleDark,
     containerRef,
@@ -29,7 +27,7 @@ export default function ChatApp() {
   return (
     <ThemeRoot dark={dark}>
       <BackgroundBlobs />
-      <Header dark={dark} onToggleDark={toggleDark} showEnHint={showEnHint} onTryEn={tryEn} />
+      <Header dark={dark} onToggleDark={toggleDark} />
       <MessageList
         containerRef={containerRef}
         messages={messages}

@@ -25,6 +25,7 @@
 - [Stage 8: Diagnosing `/api/query` latency -- the reranker was the real bottleneck (2026-08-04)](#stage-8-diagnosing-apiquery-latency----the-reranker-was-the-real-bottleneck-2026-08-04)
 - [Stage 8 follow-up: reranker batching/thread tuning attempt -- no improvement (2026-08-04)](#stage-8-follow-up-reranker-batchingthread-tuning-attempt----no-improvement-2026-08-04)
 - [Stage 7 follow-up: two OOS response UI fixes (2026-08-04)](#stage-7-follow-up-two-oos-response-ui-fixes-2026-08-04)
+- [Stage 9: making the EN toggle actually work -- English answer generation (2026-08-05)](#stage-9-making-the-en-toggle-actually-work----english-answer-generation-2026-08-05)
 
 ## Stage 1: Data parsing validation (2026-07-09)
 
@@ -2172,3 +2173,251 @@ punctuation after the match alone wasn't sufficient). The
 a namespace parameter rather than duplicating it, with a comment noting
 this is deliberately different from `low_confidence`'s
 always-expanded design.
+
+## Stage 9: making the EN toggle actually work -- English answer generation (2026-08-05)
+
+### Background
+
+Stage 7 only scaffolded next-intl routing (`/ko`, `/en`); the EN button
+was a stub that just showed a "coming soon" tooltip. This round made it
+real: (1) the whole UI switches language, (2) the Gemini-generated
+answer body comes back in English, and (3) article citations (law name,
+article number, paragraph number) stay in their original Korean form
+regardless. Scope was decided ahead of time -- UI copy, answer body, and
+fixed backend messages (OOS/low-confidence notices) are all in scope for
+translation; the citations themselves and `related_scope_info`'s raw
+article text/title are explicitly out of scope.
+
+### Design 1: threading `language` through the whole pipeline
+
+`routes/query.py`'s `answer_question(question, session_user_type=None,
+language="ko")` -> `classify(question, session_user_type, language)` ->
+`generate_answer(question, results, language)`. The `/api/query` view
+falls back to `"ko"` whenever the request body's `language` isn't
+`"ko"`/`"en"` -- existing callers (the RAGAS eval script, etc.) that
+don't pass the parameter still take the Korean path, so no regression.
+
+Every fixed string (`classifier/model.py`'s `OUT_OF_SCOPE_*`/
+`POST_SERVICE_FALLBACK_MESSAGE`, `routes/query.py`'s
+`LOW_CONFIDENCE_NOTICE`) became a `{"ko": ..., "en": ...}` dict indexed
+by `[language]`, for one consistent pattern. `search_space` keyword
+matching (detecting KATUSA/language-specialist mentions, etc.) stays
+Korean-only regardless of language -- incoming questions are still
+assumed to be Korean (the EN toggle only changes output language, per
+the scope decision). `user_type_tags`/`topic_tags` aren't translated
+either, since they're classification labels, not prose -- the EN
+guidance sentence's `{user_types}` slot gets the Korean tag verbatim
+("영주권자", etc.), the same intentional choice as keeping citations
+Korean.
+
+### Design 2: citation_parser language compatibility -- two false starts before landing
+
+`generation/citation_parser.py` originally parsed answers using a single
+**Korean** regex trigger, `"{law_name}...에 따르면"`. What to do about
+this in EN mode actually took three iterations.
+
+**Attempt 1 (discarded)**: rather than optimistically assuming an
+English answer would "naturally" reproduce that phrase, the EN system
+instruction hard-coded the literal Korean trigger into English
+sentences -- "keep '제N조 제M항에 따르면' exactly as shown, even inside an
+English sentence." Measured: citation_parser worked unmodified (all 6
+citations parsed), but reading the actual answer showed sentences like
+`"According to 병역법 시행령 별표 3에 따르면, ..."` -- "에 따르면" already
+means "according to," so the English "According to" duplicated the same
+meaning in two languages.
+
+**Attempt 2 (also discarded)**: treated "에 따르면" as the entire
+citation lead-in and told the model not to prefix it with an English
+preposition -- sentences started directly with the Korean phrase
+("병역법 제27조 제3항에 따르면, the permit may be revoked..."). Parsing was
+still fine and the duplication was gone, but the user flagged something
+more fundamental: the actual requirement was that an English answer
+should have *only* "according to," with no "에 따르면" at all. Removing
+the duplication wasn't enough -- the EN citation format itself needed a
+real redesign.
+
+**Final design**: added a dedicated EN regex to `citation_parser.py`
+instead. `_build_citation_pattern(law_names, language)` now dispatches
+per language:
+
+- KO (unchanged): `"{law_name}(제{N}조(의{sub})?( 제{M}항)?)?에 따르면"`
+- EN (new): `"According to {law_name}( Article {N}(-{sub})?(, Paragraph {M})?)?"`
+
+`generate_answer()`'s EN system instruction (`_CITATION_RULE["en"]`) was
+rewritten to match -- it now explicitly forbids "에 따르면"/"제N조"/
+"제M항" from appearing anywhere in an English answer, and requires
+"According to {law name} Article {N}, Paragraph {M}, ..." instead. The
+law name itself (`{law name}`) still stays in its original Korean form
+either way -- that part of the requirement never changed. A 별표 (table)
+source still ends with just `"According to {law_name}, ..."` and no
+Article/Paragraph, mirroring how the Korean version handles tables.
+
+The KO/EN system instructions share their grounding rule, insufficient-
+information fallback, and citation-format rule as `_GROUNDING_RULE`/
+`_INSUFFICIENT_INFO_RULE`/`_CITATION_RULE` dicts (ko/en pairs), with
+`SYSTEM_INSTRUCTION_KO`/`SYSTEM_INSTRUCTION_EN` assembled from those to
+cut down on duplication. `routes/query.py`'s `parse_citations(answer,
+results, language)` call was updated to pass `language` through too.
+
+Added 4 EN cases to `tests/test_citation_parser.py` (a basic citation, a
+table citation with no Article/Paragraph, a sub-numbered article
+round-tripping "27의2" <-> "Article 27-2", and a KO-default regression
+check) -- 9/9 passing.
+
+### Design 3: turning the EN button into a real locale switch
+
+`components/Header.tsx` now uses next-intl's `useLocale()`/`useRouter()`/
+`usePathname()` (already exported from `i18n/routing.ts`, just unused)
+so clicking the KO/EN pill calls `router.replace(pathname, {locale})`
+and actually navigates. The old "coming soon" stub machinery
+(`showEnHint`/`tryEn`/`EN_HINT_MS`, the `langToggle.enHint` message key)
+was removed entirely -- cleaned out of `hooks/useChatSession.ts`,
+`components/ChatApp.tsx`, `lib/constants.ts`, and
+`messages/{ko,en}.json`. `lib/api.ts`'s `queryApi()` gained a `language`
+argument, and `useChatSession` passes through whatever `useLocale()`
+currently reports.
+
+### Design 4: real `messages/en.json` translation
+
+Replaced what had been a literal copy of `ko.json` with actual English
+throughout -- header, disclaimer, loading-stage labels, evidence/related-
+article toggle copy, the 3 sample questions, input placeholder. The
+disclaimer's "병무청(1588-9090)" got a country code, "+82-1588-9090",
+given that this is meant to be dialed internationally.
+
+### Verification 1: a MongoDB Atlas outage (unrelated, hit mid-verification)
+
+Mid-verification, `/api/query` started returning 500s. The log showed
+the TLS handshake to MongoDB Atlas itself failing with
+`TLSV1_ALERT_INTERNAL_ERROR`. A raw `ssl`-socket connection straight to
+the Atlas host (bypassing pymongo entirely) failed the same way, which
+pointed at a network/Atlas-access-list issue rather than anything in
+this change -- reported to the user and paused. After the user updated
+the IP allowlist, the connection recovered. Unrelated to the EN feature
+itself, but recorded here since it interrupted verification partway
+through.
+
+### Verification 2: `classify()` language-branch unit checks (no Mongo needed, checked first)
+
+Checked everything that didn't depend on Mongo first, via direct calls:
+- KO default (no parameter) vs. KO explicit -- identical, no regression
+- EN: KATUSA alone / no user-type detected / KATUSA+language-specialist
+  combo (including the relation note) / POST_SERVICE -- all read
+  naturally in English, MMA URLs untouched
+- An invalid language value (`"fr"`) falls back to `"ko"`
+- In-scope questions produce identical `user_type_tags`/`topic_tags`
+  regardless of language
+- `python3 -m pytest tests/` (5/5), frontend `tsc --noEmit`/`eslint`/
+  `vitest` (19/19) all pass
+
+### Verification 3: EN normal/low_confidence/out_of_scope, real HTTP round trips
+
+After a clean restart (once Mongo was back), called `/api/query` for
+real:
+
+- **Normal answer, a 별표 (table) source** ("영주권자인데 국외여행허가
+  어떻게 받나요?" -- "I have a green card, how do I get overseas travel
+  permission?", `language: "en"`) -- final design, after the citation
+  redesign below:
+  ```
+  According to 병역법 시행령 별표 3, among those subject to 병역준비역,
+  social service personnel convocation (사회복무요원 소집대상), ... a
+  person who has obtained foreign permanent residency (영주권등) and
+  has continuously resided in that country for less than 3 years can
+  receive an overseas travel permit or permit extension once within a
+  3-year scope, ...
+  ```
+  No "에 따르면" -- starts directly with "According to {law_name}, ..."
+  (no Article/Paragraph, since it's a table source). All 4 citations in
+  `answer_segments` parsed correctly.
+- **Normal answer, an ordinary article source** ("유학 중인데 휴학하면
+  입영연기가 취소되나요" -- "I'm studying abroad, does taking a leave of
+  absence cancel my enlistment postponement?", `language: "en"`) --
+  checks both a law name with an internal space
+  ("병역의무자 국외여행 업무처리 규정") and an ordinary article
+  (Article/Paragraph):
+  ```
+  According to 병역의무자 국외여행 업무처리 규정 Article 27, Paragraph 3,
+  if a person who received overseas travel permission for the purpose
+  of studying abroad fails to maintain the permission requirements ...
+  ```
+  All 3 citations parsed with the correct `law_name`/`article_no`
+  ("27")/`paragraph_no` ("3") -- the space-containing law name matches
+  exactly as reliably as it does in KO mode.
+- **low_confidence** ("미국 영주권 받은 지 2년밖에 안 됐는데" -- "I only
+  got my US green card 2 years ago", `language: "en"`):
+  `low_confidence_notice` comes back in English ("The search results
+  have low confidence. ..."), `answer: null` (by existing design,
+  `generate_answer()` never gets called on this path).
+- **out_of_scope** ("카투사 지원하고 싶은데 영주권자도 되나요?" -- "I
+  want to apply for KATUSA, does having a green card qualify me too?",
+  `language: "en"`): `message` is assembled in English with the MMA URL
+  untouched; `related_scope_info`'s article `text` comes back in its
+  original Korean, untranslated, as designed.
+
+### Verification 4: the same 3 questions, KO regression
+
+Re-ran the same 3 questions with `language: "ko"` (and with it omitted)
+-- answers and messages come back in the same shape as before (Korean
+answer, Korean guidance text). No regression.
+
+### Verification 5: Playwright, the EN toggle's real UI behavior
+
+On `/ko`, clicking the EN pill navigates to `/en` for real; header,
+disclaimer, empty-state copy, all 3 sample questions, and the input
+placeholder all swap to English, confirmed via screenshot. The old
+"영문 버전은 준비 중이에요" ("English version coming soon") text has zero
+matches -- the stub is fully gone. Clicking KO from `/en` returns to
+`/ko` with Korean UI restored. Zero console errors throughout.
+
+### Found and redesigned: the EN citation format was wrong, twice
+
+Reading the actual answers from Verification 3's first pass caught two
+separate problems, one after the other.
+
+1. First: `"According to 병역법 시행령 별표 3에 따르면, ..."` -- "에
+   따르면" already means "according to," so the English "According to"
+   duplicated the same meaning twice. The root cause was the example
+   sentence written directly into `_CITATION_RULE["en"]`: `"Under
+   병역법 제27조 제3항에 따르면, ..."`. "Under" overlaps with "~에 따르면"
+   too, and the model generalized that pattern into "According to."
+2. The first fix (drop the English preposition, start the sentence
+   directly with "병역법 ...에 따르면, ...") removed the duplication, but
+   the user then flagged something more fundamental: the actual
+   requirement was that an English answer should have *only* "according
+   to," with no "에 따르면" anywhere. Just removing the duplication
+   wasn't enough -- the EN citation format itself needed a real
+   redesign.
+
+The final fix added a dedicated EN regex to `citation_parser.py`
+("According to {law_name} Article {N}, Paragraph {M}") and rewrote
+`_CITATION_RULE["en"]` to forbid the Korean citation phrase from
+appearing at all (see Design 2 above). Re-ran both a table-source
+question and an ordinary-article question (including a law name with an
+internal space) after restarting the backend -- both came back as
+"According to {law_name}..." with zero occurrences of "에 따르면", and
+`answer_segments` still parsed correctly (Verification 3's final
+examples above).
+
+What this shows: **automated verification (does citation_parser
+successfully parse the text) can't catch "parses fine but reads
+awkwardly, or doesn't match the actual spec."** Both times, parsing
+itself worked from the very first attempt -- the real failure was in
+prose quality/style, and only showed up once a human actually read the
+output.
+
+### Conclusion
+
+The EN toggle went from a stub to an actually working feature -- locale
+switching (frontend), answer-generation language branching (backend
+Gemini), fixed-message language branching (backend), and citation-
+parsing language compatibility were all verified against real requests.
+The citation format itself took three iterations to land (forcing the
+Korean phrase into English sentences -> just removing the duplication
+-> a dedicated EN parsing rule) -- but the underlying approach of never
+trusting the LLM to "naturally" match the required format, and instead
+spelling out the exact format in the system instruction every time,
+held up throughout. The format itself was wrong twice; the strategy of
+mandating it explicitly wasn't. The MongoDB Atlas outage hit partway
+through was an unrelated infrastructure issue, resolved once the user
+updated the IP allowlist.
