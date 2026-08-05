@@ -6,12 +6,17 @@ export default function EvidenceToggleButton({
   count,
   revealed,
   onClick,
+  namespace = "evidence",
 }: {
   count: number;
   revealed: boolean;
   onClick: () => void;
+  // "oos" reuses this component with "관련 조항" copy instead of "근거 조항"
+  // (see messages/ko.json's oos.showToggle/hideToggle) -- same toggle
+  // behavior, different label namespace.
+  namespace?: "evidence" | "oos";
 }) {
-  const t = useTranslations("evidence");
+  const t = useTranslations(namespace);
 
   return (
     <div

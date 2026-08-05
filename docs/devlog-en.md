@@ -507,6 +507,69 @@ Diagnosis and instrumentation (preload + timing logs) only this round --
 the reranker itself was left untouched. Full numbers and code are in the
 "Stage 8" section of `docs/eval_results-en.md`.
 
+## Stage 8 follow-up 1: reranker batching/thread tuning attempt -- no improvement (2026-08-04)
+
+Picking up from Stage 8's conclusion ("the reranker is the real
+bottleneck"), this round checked whether anything about it could
+actually be fixed. Two ideas: (1) if `rerank()` called `predict()`
+per-pair in a loop, switch to one batched call; (2) if it was still slow
+after that, try raising the CPU thread count.
+
+Idea 1 turned out to be moot -- it already passed the entire candidate
+pool to `model.predict(pairs)` in a single call, nothing to fix. Moving
+to idea 2: `torch.get_num_threads()` was 4, but this machine (M3) has 8
+logical cores. Added `torch.set_num_threads(os.cpu_count())` to the top
+of `reranker.py`.
+
+The 3 anchor-query scores (leave of absence -> Art. 27(3) 0.5618,
+part-time job -> Art. 22 0.3002, "how long can I put it off" -> Attached
+Table 3 0.3092) matched to the decimal before and after the thread-count
+change -- no regression. But re-running the 4 `[timing]` queries showed
+rerank time essentially unchanged: 47.55->52.25s, 73.11->72.19s,
+72.67->72.40s, 42.68->40.69s (one case even got worse). Conclusion:
+neither attempt helped. A single forward pass of bge-reranker-v2-m3 was
+likely already saturated at 4 threads, or the workload just doesn't
+scale linearly with thread count. The change is harmless so it stayed in
+the code, but it isn't validated as a fix. Full numbers in the "Stage 8
+follow-up" section of `docs/eval_results-en.md`.
+
+## Stage 7 follow-up: two OOS response UI fixes (2026-08-04)
+
+Found and fixed two issues while manually testing "I want to apply for
+KATUSA, does having a green card qualify me too?": (1) the MMA link
+inside the OOS message was plain text, unclickable; (2) the
+`relatedScopeInfo` evidence cards always rendered fully expanded,
+pushing the actual guidance message off-screen.
+
+Decided to linkify only at the frontend display layer, without changing
+the backend's message format -- added `linkifyText()` following the same
+pattern as `mapAnswerSegments`, splitting text into text/link segments.
+The first pass matched URLs with a plain `\S+` and trimmed trailing
+punctuation afterward, which failed on a parenthesis-wrapped link like
+"see the notice(https://...)" -- the closing paren and whatever touched
+it with no space ("...0525)를") got swallowed whole into the URL. Wrote
+6 unit tests first and one of them actually caught this -- not something
+that would've been obvious from just reading the code. Fixed by
+excluding `)` from the URL character class entirely. Along the way, also
+noticed the backend's `\n`-separated message lines weren't being
+rendered as real line breaks at all, and fixed that with `whiteSpace:
+pre-line`.
+
+For the toggle, reproduced `MessageItem.tsx`'s existing pattern (local
+`useState` + `EvidenceToggleButton` + a conditional card list) inside
+`OosCard.tsx`. `EvidenceToggleButton` had the `evidence` i18n namespace
+hardcoded, so added a `namespace` prop to reuse it instead of writing a
+new component.
+
+Verified in a real Playwright headless browser: the KATUSA question's
+link is clickable and the toggle expands/collapses correctly; the
+`related_scope_info: null` case (no user-type keyword detected) renders
+no toggle button at all; the existing `isNormal`/`low_confidence` toggle
+behavior shows no regression -- zero console errors across the board.
+`vitest` (19/19), `tsc --noEmit`, and `eslint` all pass. Full
+verification log and screenshot notes are in the "Stage 7 follow-up"
+section of `docs/eval_results-en.md`.
+
 ## Progress summary
 
 Stages 1-8 are all done. See each stage's section above and
@@ -514,10 +577,11 @@ Stages 1-8 are all done. See each stage's section above and
 
 ## What's left
 
-- **Reranker latency**: the real bottleneck found in Stage 8 -- the CPU
-  CrossEncoder scores up to 50 candidates in full on every request,
-  costing 43-73s per request. Needs one of: shrinking the candidate pool,
-  revisiting batching, or reconsidering device (MPS) -- not yet touched.
+- **Reranker latency**: confirmed that neither batching nor thread-count
+  tuning helps. What's left is either shrinking the candidate pool
+  (requires revisiting the tradeoff against the issue-1 accuracy fix) or
+  switching to `device="mps"` (revisiting the original CPU choice, made
+  over memory-pressure concerns) -- neither attempted yet.
 - **Real next-intl English translations**: the routing structure is in
   place from Stage 7, but `messages/en.json` is still a literal copy of
   `ko.json` -- actual translation work remains.

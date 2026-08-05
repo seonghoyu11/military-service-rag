@@ -1,4 +1,14 @@
+import os
+
+import torch
 from sentence_transformers import CrossEncoder
+
+# Torch's default intra-op thread count is half the logical cores on this
+# machine (4 of 8). The reranker runs on CPU by design (see _get_model's
+# device="cpu" comment below), so give it every core instead of leaving half
+# idle. Runs once at import time -- before any request, since app.py imports
+# this module (via routes/query.py) at server startup.
+torch.set_num_threads(os.cpu_count() or 1)
 
 MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 

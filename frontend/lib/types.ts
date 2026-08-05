@@ -90,6 +90,18 @@ export interface AnswerPartCitation {
 
 export type AnswerPart = AnswerPartText | AnswerPartCitation;
 
+export interface LinkPartText {
+  isLink?: false;
+  text: string;
+}
+
+export interface LinkPartLink {
+  isLink: true;
+  url: string;
+}
+
+export type LinkPart = LinkPartText | LinkPartLink;
+
 export type ViewModel =
   | { type: "oos"; message: string; relatedScopeInfo: RelatedScopeItem[] }
   | { type: "lowConf"; notice: string; intent: IntentInfo; results: RankedResult[] }

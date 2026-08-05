@@ -37,7 +37,9 @@
     "message": "관련 조항을 찾지 못했어요. 다른 표현으로 다시 질문해보세요."
   },
   "oos": {
-    "relatedLabel": "참고할 수 있는 관련 조항"
+    "relatedLabel": "참고할 수 있는 관련 조항",
+    "showToggle": "관련 조항 {count}건 보기",
+    "hideToggle": "관련 조항 숨기기"
   },
   "evidence": {
     "label": "근거 조항",

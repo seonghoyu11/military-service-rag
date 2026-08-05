@@ -1,6 +1,7 @@
 import type {
   AnswerPart,
   AnswerSegment,
+  LinkPart,
   QueryApiResponse,
   RankedResult,
   ResultItem,
@@ -55,6 +56,49 @@ export function formatArticleLabel(
       ? ` 제${paragraphNo}항`
       : "";
   return `${namePart}제${articleNo}조${paragraphPart}`;
+}
+
+// ")" is excluded from the URL body itself (not just trimmed after the
+// fact) so a link wrapped in parens -- "공고(https://...)를 확인" -- doesn't
+// swallow the closing paren and whatever text touches it with no space in
+// between ("...0525)를").
+const URL_PATTERN = /https?:\/\/[^\s)]+/g;
+// Sentence punctuation that commonly rides along on the match when it isn't
+// followed by whitespace or ")" (a period ending the sentence) -- not part
+// of the URL itself, so it must fall back into the surrounding text part
+// instead of getting swallowed into the href.
+const TRAILING_PUNCTUATION = /[.,]+$/;
+
+/**
+ * Splits OOS fallback messages (plain text from the backend, e.g.
+ * intent.fallback_message) into text/link segments so URLs render as
+ * clickable `<a>` tags. Mirrors mapAnswerSegments' text-vs-chip split above
+ * -- kept as a plain string->segments function here (not wired through the
+ * backend) since these messages are free-form guidance text, not
+ * structured citations the backend already knows the boundaries of.
+ */
+export function linkifyText(text: string): LinkPart[] {
+  const parts: LinkPart[] = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(URL_PATTERN)) {
+    const start = match.index ?? 0;
+    const trailingMatch = match[0].match(TRAILING_PUNCTUATION);
+    const url = trailingMatch ? match[0].slice(0, -trailingMatch[0].length) : match[0];
+    if (!url) continue;
+
+    if (start > lastIndex) {
+      parts.push({ text: text.slice(lastIndex, start) });
+    }
+    parts.push({ isLink: true, url });
+    lastIndex = start + url.length;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push({ text: text.slice(lastIndex) });
+  }
+
+  return parts;
 }
 
 export function mapAnswerSegments(segments: AnswerSegment[] | null): AnswerPart[] {

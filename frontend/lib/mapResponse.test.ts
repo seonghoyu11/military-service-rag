@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatArticleLabel,
+  linkifyText,
   mapAnswerSegments,
   mapResponseToViewModel,
   rankRelevance,
@@ -59,6 +60,68 @@ describe("formatArticleLabel", () => {
       withParagraph: false,
     });
     expect(label).toBe("제27조");
+  });
+});
+
+describe("linkifyText", () => {
+  it("returns a single text part when there's no URL", () => {
+    expect(linkifyText("이 챗봇은 입영 전 절차만 다룹니다.")).toEqual([
+      { text: "이 챗봇은 입영 전 절차만 다룹니다." },
+    ]);
+  });
+
+  it("splits surrounding text from a bare URL", () => {
+    const text = "카투사: https://www.mma.go.kr/contents.do?mc=mma0000525 확인해 주세요";
+    expect(linkifyText(text)).toEqual([
+      { text: "카투사: " },
+      { isLink: true, url: "https://www.mma.go.kr/contents.do?mc=mma0000525" },
+      { text: " 확인해 주세요" },
+    ]);
+  });
+
+  it("keeps a trailing period out of the URL", () => {
+    const text = "자세한 내용은 https://www.mma.go.kr/contents.do?mc=mma0000525.";
+    expect(linkifyText(text)).toEqual([
+      { text: "자세한 내용은 " },
+      { isLink: true, url: "https://www.mma.go.kr/contents.do?mc=mma0000525" },
+      { text: "." },
+    ]);
+  });
+
+  it("keeps a wrapping closing paren out of the URL", () => {
+    const text = "공고(https://www.mma.go.kr/contents.do?mc=mma0000525)를 확인하세요";
+    expect(linkifyText(text)).toEqual([
+      { text: "공고(" },
+      { isLink: true, url: "https://www.mma.go.kr/contents.do?mc=mma0000525" },
+      { text: ")를 확인하세요" },
+    ]);
+  });
+
+  it("handles the real multi-line OOS message shape (one link per line)", () => {
+    const text =
+      "카투사/어학병 등 모집병 구체적 지원자격은 이 챗봇의 법령 데이터베이스에는 " +
+      "포함되어 있지 않습니다. 정확한 기준은 아래 병무청 모집공고를 확인해 주세요.\n" +
+      "- 카투사: https://www.mma.go.kr/contents.do?mc=mma0000525";
+    const parts = linkifyText(text);
+    expect(parts[parts.length - 1]).toEqual({
+      isLink: true,
+      url: "https://www.mma.go.kr/contents.do?mc=mma0000525",
+    });
+    // The newline before "- 카투사" must survive into the text part so
+    // white-space: pre-line can still render it as a real line break.
+    expect(parts[parts.length - 2]).toEqual({
+      text: expect.stringContaining("\n- 카투사: "),
+    });
+  });
+
+  it("linkifies multiple URLs in the same message independently", () => {
+    const text = "카투사: https://a.example/x\n어학병: https://b.example/y";
+    expect(linkifyText(text)).toEqual([
+      { text: "카투사: " },
+      { isLink: true, url: "https://a.example/x" },
+      { text: "\n어학병: " },
+      { isLink: true, url: "https://b.example/y" },
+    ]);
   });
 });
 

@@ -23,6 +23,8 @@
 - [New `answer_segments` field -- citation parsing (2026-08-03)](#new-answer_segments-field----citation-parsing-2026-08-03)
 - [Stage 7: Next.js frontend, real end-to-end verification (2026-08-04)](#stage-7-nextjs-frontend-real-end-to-end-verification-2026-08-04)
 - [Stage 8: Diagnosing `/api/query` latency -- the reranker was the real bottleneck (2026-08-04)](#stage-8-diagnosing-apiquery-latency----the-reranker-was-the-real-bottleneck-2026-08-04)
+- [Stage 8 follow-up: reranker batching/thread tuning attempt -- no improvement (2026-08-04)](#stage-8-follow-up-reranker-batchingthread-tuning-attempt----no-improvement-2026-08-04)
+- [Stage 7 follow-up: two OOS response UI fixes (2026-08-04)](#stage-7-follow-up-two-oos-response-ui-fixes-2026-08-04)
 
 ## Stage 1: Data parsing validation (2026-07-09)
 
@@ -1951,3 +1953,222 @@ costing 43-73s per request, is the actual dominant bottleneck. Only
 diagnosis and timing instrumentation were added this round; the reranker
 itself (candidate-pool size, batching, device) was left untouched. Left
 as the next task.
+
+## Stage 8 follow-up: reranker batching/thread tuning attempt -- no improvement (2026-08-04)
+
+### Background
+
+Stage 8 established that rerank costs 43-73s per request, 75-80% of the
+total. `routes/query.py` already had a comment noting that "since issue 1
+was fixed, the reranker scores up to 50 candidates every time with no
+`top_k` cutoff." Shrinking that candidate pool wasn't an option, though --
+it's a load-bearing accuracy fix (issue 1: the anchor boost needs the full
+pool scored so a chunk can survive past the top-15 cutoff). So this round
+narrowed to: can *how* those same 50 candidates get scored be sped up?
+
+### Check 1: a per-pair `predict()` loop -- already batched
+
+Opened `retrieval/reranker.py`'s `rerank()`:
+
+```python
+pairs = [(query, chunk["text"]) for chunk, _ in candidates]
+scores = model.predict(pairs)
+```
+
+The full list of candidate pairs is built once and passed to
+`model.predict(pairs)` in a single call -- not a per-pair loop.
+`CrossEncoder.predict()` (sentence-transformers 5.6.0) also already
+auto-batches internally with a default `batch_size=32`. There was nothing
+to convert from "individual calls" to "one batched call" -- the batching
+fix planned for this round was skipped.
+
+### Check 2: CPU thread count -- only half the cores in use
+
+From a different angle: `torch.get_num_threads()` was 4, but this machine
+(Apple M3) has 8 logical cores. `reranker.py` pins `device="cpu"`
+explicitly, so raising the thread count to match the core count looked
+like a plausible way to speed up CPU inference.
+
+### Fix: `torch.set_num_threads()`
+
+Added to the top of `retrieval/reranker.py` (right after the imports,
+before any class/function definitions):
+
+```python
+torch.set_num_threads(os.cpu_count() or 1)
+```
+
+Runs exactly once, at server startup, when the `reranker` module is first
+imported via the `routes/query.py` -> `retrieval` import chain.
+
+### Verification 1: anchor-query score regression -- identical
+
+Re-ran the 3 anchor queries used as the standing regression benchmark
+after a clean restart:
+
+| Query | Expected | Measured (8-thread) |
+|---|---|---|
+| "Studying abroad -- does a leave of absence cancel my enlistment postponement?" | Art. 27(3), 0.5618 | Art. 27(3), **0.5618** |
+| "Is a part-time job a problem?" | Art. 22, 0.3002 | Art. 22, **0.3002** |
+| "Green card holder -- how long can I put off enlistment?" | Attached Table 3, 0.3092 | Attached Table 3, **0.3092** |
+
+Exact match to the decimal -- confirms the thread-count change doesn't
+touch the scoring/boost logic itself. Expected: thread count only
+determines how many cores the same floating-point work gets spread across,
+not the result.
+
+### Verification 2: before/after on the 4 `[timing]` queries
+
+Re-ran the same 4 queries used in Stage 8:
+
+| Query | rerank (before, 4-thread) | rerank (after, 8-thread) | Delta |
+|---|---|---|---|
+| Green card holder under 25 | 47.55s | 52.25s | +4.70s (worse) |
+| Overseas student, postponing the conscription exam | 73.11s | 72.19s | -0.92s |
+| Currently overseas, postponing the conscription exam | 72.67s | 72.40s | -0.27s |
+| Green card holder, overseas-travel permit | 42.68s | 40.69s | -1.99s |
+
+Totals are essentially unchanged too: 60.62->60.43s, 94.29->91.29s,
+87.33->85.52s, 56.71->54.15s. (retrieval dropped noticeably on some
+queries -- 7.65->2.90s -- but rose on another (6.65->7.91s), which reads
+as system noise rather than a thread-count effect.)
+
+### Conclusion
+
+Neither change attempted this round (batching, thread count) meaningfully
+reduced rerank latency. Batching wasn't needed in the first place (already
+a single batched call), and the thread-count bump just moved within noise
+with no systematic gain -- a single forward pass of
+bge-reranker-v2-m3 (XLM-RoBERTa-large scale, ~560M params) was likely
+already saturated at 4 intra-op threads, or the workload simply doesn't
+scale linearly with thread count. `torch.set_num_threads(8)` is harmless
+and regression-free, so it stays in the code, but it isn't validated as a
+fix for the bottleneck.
+
+What's left: (1) actually shrinking the candidate pool (requires
+revisiting the tradeoff against the issue-1 accuracy fix), or (2)
+switching to `device="mps"` (the existing code comment cites memory
+pressure as the reason CPU was chosen, so this needs its own look). Neither
+was attempted this round -- reported only.
+
+## Stage 7 follow-up: two OOS response UI fixes (2026-08-04)
+
+### Background
+
+Found two frontend issues while manually testing "I want to apply for
+KATUSA, does having a green card qualify me too?":
+
+1. The MMA link embedded in the OOS `message` (e.g. "...KATUSA:
+   https://www.mma.go.kr/contents.do?mc=mma0000525...") rendered as
+   plain, unclickable text -- half-defeating the fallback message's whole
+   point (pointing the user at the official MMA page).
+2. `relatedScopeInfo` (evidence cards like Article 24) always rendered
+   fully expanded right below the message, pushing the actual guidance
+   text off-screen. The "normal" answer's evidence section already
+   defaults to collapsed behind a toggle ("Show N evidence articles" /
+   "Hide"); the OOS path was missing that same pattern.
+
+### Fix 1: make URLs inside the message clickable
+
+`message` is plain text from the backend (`intent.fallback_message`),
+with no HTML/link markup. Rather than have the backend start emitting
+markup-laced strings (which would eventually tangle with citation
+parsing elsewhere), the decision was to keep the backend's plain text as
+is and **linkify only at the display layer**.
+
+Added `linkifyText(text: string): LinkPart[]` to `lib/mapResponse.ts` --
+same shape as the existing `mapAnswerSegments` pattern (splitting text
+into segments that pair with citation chips), applied here to URLs
+instead:
+
+```ts
+const URL_PATTERN = /https?:\/\/[^\s)]+/g;
+const TRAILING_PUNCTUATION = /[.,]+$/;
+```
+
+`)` is excluded from the URL character class entirely, so a
+parenthesized link ("공고(https://...)를 확인하세요" -- "see the
+notice(https://...)") doesn't swallow the closing paren and whatever
+text touches it with no space in between (a first pass that only
+trimmed trailing punctuation *after* matching let "...mma0000525)를" get
+matched as part of the URL -- caught by a unit test, not by inspection).
+Trailing periods/commas are still trimmed separately.
+
+Rendering lives in a new `components/LinkifiedText.tsx`, rendering
+`<a target="_blank" rel="noopener noreferrer">`. Also added
+`whiteSpace: "pre-line"` to `OosCard.tsx`'s message container -- a side
+discovery: the backend message uses `\n` to separate multiple lines
+(guidance text + link line + a second guidance paragraph), but the
+existing code never honored that, so everything rendered as one run-on
+line.
+
+Added 6 unit tests for `linkifyText` to `lib/mapResponse.test.ts` (no
+URL, a bare URL between plain text, a trailing period, a
+parenthesis-wrapped link, the real multi-line OOS message shape, two
+URLs in one message) -- the parenthesis case is the one that actually
+failed on the first implementation and forced the regex fix above.
+
+### Fix 2: collapse `relatedScopeInfo` behind a toggle too
+
+Reproduced the "normal" case's toggle pattern (local `useState` +
+`EvidenceToggleButton` + a conditionally rendered `EvidenceCardList`,
+all owned by `MessageItem.tsx`) inside `OosCard.tsx` itself -- kept
+local to `OosCard` rather than lifted into `MessageItem`, since
+`OosCard` already owns all of `relatedScopeInfo`'s rendering.
+
+`EvidenceToggleButton` previously hardcoded the `evidence` i18n
+namespace; added a `namespace?: "evidence" | "oos"` prop so the OOS
+case can use "관련 조항" ("related articles") copy instead of "근거 조항"
+("evidence articles") -- new `oos.showToggle`/`oos.hideToggle` keys,
+chosen to read naturally alongside the existing `oos.relatedLabel`
+("참고할 수 있는 관련 조항" / "related articles you can reference").
+Added to both `messages/ko.json` and `messages/en.json` (English is
+still an untranslated copy of the Korean strings, per the project's
+current state).
+
+The `low_confidence` path's result list stays permanently expanded, by
+existing design -- only OOS changed here; `low_confidence` was left
+untouched.
+
+### Verification
+
+Clean restart (backend + frontend) then Playwright headless browser:
+
+- **"I want to apply for KATUSA, does having a green card qualify me
+  too?"**: the message's link renders as a real
+  `<a href="https://www.mma.go.kr/contents.do?mc=mma0000525"
+  target="_blank" rel="noopener noreferrer">` and is clickable.
+  Default state shows only the "관련 조항 9건 보기" ("show 9 related
+  articles") toggle, cards collapsed. Clicking it flips to "관련 조항
+  숨기기" ("hide") and the Article 24 cards (paragraphs 1, 2, etc.)
+  expand correctly. Zero console errors.
+- **"I want to apply for KATUSA"** (no user-type keyword detected,
+  `related_scope_info: null`): the toggle button itself doesn't render
+  at all (count 0) -- no empty-toggle bug. The message's line breaks
+  render correctly too (the `white-space: pre-line` effect). Zero
+  console errors.
+- **Regression check**: "Green card holder, how do I get an
+  overseas-travel permit?" (a normal answer) -- the existing "show N
+  evidence articles" toggle still works (expand/collapse verified,
+  screenshot confirms card rendering). "I got my green card only 2
+  years ago" (low_confidence) -- results still render always-expanded
+  with no toggle, matching the existing design. Zero console errors on
+  both.
+- `npx vitest run` (19/19), `npx tsc --noEmit`, and `npm run lint` all
+  pass.
+- 4 screenshots captured (OOS default state, OOS toggle expanded,
+  normal-answer toggle expanded, low_confidence state) -- not committed
+  to the repo (disposable verification artifacts).
+
+### Conclusion
+
+Both fixes were verified against a real running browser. The URL
+linkification stays entirely in the frontend display layer without
+changing the backend's message format, keeping it decoupled from
+citation parsing and similar features -- and the parenthesis-wrapped
+link case was a real bug a unit test caught (trimming trailing
+punctuation after the match alone wasn't sufficient). The
+`relatedScopeInfo` toggle reuses the existing `EvidenceToggleButton` via
+a namespace parameter rather than duplicating it, with a comment noting
+this is deliberately different from `low_confidence`'s
+always-expanded design.
